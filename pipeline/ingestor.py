@@ -27,25 +27,36 @@ class PDFIngestor:
         self._total_pages = len(self._doc)
         logger.info(f"Opened PDF: {self.pdf_path} ({self._total_pages} pages)")
 
+    def _decide_dpi(self, width_pt: float, height_pt: float) -> int:
+        """Adaptive DPI theo PAGE_SIZE_GROUPS; fallback self.dpi."""
+        try:
+            return config.page_size_ocr_dpi(width_pt, height_pt, default_dpi=self.dpi)
+        except Exception:
+            return self.dpi
+
     def stream_pages(
         self,
         max_pages: int | None = None,
-    ) -> Generator[tuple[int, np.ndarray], None, None]:
+        adaptive_dpi: bool = False,
+    ) -> Generator[tuple[int, np.ndarray, float, float], None, None]:
         """
-        Yield (page_number, page_image_as_numpy_array) for each page.
+        Yield (page_number, image, width_pt, height_pt) for each page.
         page_number is 1-indexed.
-        Render each page to RGB numpy array at self.dpi.
-        Release each page from memory after yielding.
-        Log progress every 50 pages using loguru.
+        width_pt / height_pt lấy từ page.rect TRƯỚC khi render (không phụ thuộc DPI).
+        adaptive_dpi=True → DPI theo size group; False → self.dpi cố định.
         """
         limit = self._total_pages if max_pages is None else min(max_pages, self._total_pages)
-        zoom = self.dpi / 72.0
-        matrix = fitz.Matrix(zoom, zoom)
 
         for i in range(limit):
             page_num = i + 1
             page = self._doc.load_page(i)
             try:
+                rect = page.rect
+                width_pt = float(rect.width)
+                height_pt = float(rect.height)
+                dpi = self._decide_dpi(width_pt, height_pt) if adaptive_dpi else self.dpi
+                zoom = dpi / 72.0
+                matrix = fitz.Matrix(zoom, zoom)
                 pix = page.get_pixmap(matrix=matrix, alpha=False)
                 img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
                     pix.height, pix.width, pix.n
@@ -65,7 +76,7 @@ class PDFIngestor:
             if page_num % config.LOG_PROGRESS_EVERY == 0:
                 logger.info(f"Ingested {page_num}/{limit} pages")
 
-            yield page_num, img
+            yield page_num, img, width_pt, height_pt
 
     @property
     def total_pages(self) -> int:
@@ -111,8 +122,11 @@ if __name__ == "__main__":
 
     ingestor = PDFIngestor(pdf, dpi=150)
     print(f"Total pages: {ingestor.total_pages}")
-    for page_num, image in ingestor.stream_pages(max_pages=10):
-        print(f"Page {page_num}: shape={image.shape}, dtype={image.dtype}")
+    for page_num, image, w_pt, h_pt in ingestor.stream_pages(max_pages=10):
+        print(
+            f"Page {page_num}: shape={image.shape}, dtype={image.dtype}, "
+            f"size_pt={w_pt:.1f}x{h_pt:.1f}"
+        )
         del image
     ingestor.close()
     print("Ingestor smoke test OK")

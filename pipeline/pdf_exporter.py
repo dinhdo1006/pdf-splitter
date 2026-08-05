@@ -25,6 +25,7 @@ class PDFExporter:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.review_dir = self.output_dir / "_review"
         self.orphans_dir = self.review_dir / "orphans"
+        self.tentative_dir = self.review_dir / "tentative"
         try:
             self.src_doc = fitz.open(self.source_pdf_path)
             logger.info(f"Exporter opened source: {self.source_pdf_path}")
@@ -124,13 +125,15 @@ class PDFExporter:
         type_totals: Counter,
     ) -> tuple[str, str]:
         """
-        Returns (filename_with_pdf, bucket) where bucket is 'success' | 'review'.
+        Returns (filename_with_pdf, bucket)
+        bucket: 'success' | 'review' | 'tentative'
         """
         key = (group.doc_type or "").upper()
+        is_tentative = bool(getattr(group, "_is_tentative", False))
+
         if key not in PARTY_DOC_CATALOG:
-            # Không đặt tên Phụ lục 2
             safe = f"KHAC_group_{group.group_id:03d}.pdf"
-            return safe, "review"
+            return safe, "tentative" if is_tentative else "review"
 
         total = type_totals[key]
         seq = getattr(group, "_sequence_number", 0) or 0
@@ -146,8 +149,10 @@ class PDFExporter:
         except (KeyError, ValueError) as exc:
             logger.error(f"build_filename failed for {key}: {exc}")
             filename = f"KHAC_group_{group.group_id:03d}.pdf"
-            return filename, "review"
+            return filename, "tentative" if is_tentative else "review"
 
+        if is_tentative:
+            return filename, "tentative"
         return filename, "success"
 
     def export_all(
@@ -157,13 +162,14 @@ class PDFExporter:
         docs_dir: Path | None = None,
     ) -> dict:
         """
-        Export catalog groups + orphans.
+        Export catalog groups + orphans + tentative.
 
         Returns:
             {
-              "success": [result dicts],
-              "review": [result dicts for KHAC],
-              "orphans": [result dicts],
+              "success": [...],
+              "review": [...],
+              "tentative": [...],
+              "orphans": [...],
             }
         """
         orphan_pages = orphan_pages or []
@@ -172,8 +178,8 @@ class PDFExporter:
         review_misc = self.review_dir / "khac"
         review_misc.mkdir(parents=True, exist_ok=True)
         self.orphans_dir.mkdir(parents=True, exist_ok=True)
+        self.tentative_dir.mkdir(parents=True, exist_ok=True)
 
-        # Đếm số lần mỗi doc_type trong SUCCESS path (chỉ key catalog)
         catalog_keys = [
             (g.doc_type or "").upper()
             for g in groups
@@ -183,12 +189,18 @@ class PDFExporter:
 
         success: list[dict] = []
         review: list[dict] = []
+        tentative: list[dict] = []
         orphans: list[dict] = []
 
         for group in groups:
             try:
                 filename, bucket = self._filename_for_group(group, type_totals)
-                target = dest if bucket == "success" else review_misc
+                if bucket == "success":
+                    target = dest
+                elif bucket == "tentative":
+                    target = self.tentative_dir
+                else:
+                    target = review_misc
                 output_path = self.export_group(group, filename, dest_dir=target)
                 pages = group.page_numbers
                 entry = {
@@ -201,10 +213,16 @@ class PDFExporter:
                     "doc_type": group.doc_type,
                     "doc_year": group.doc_year,
                     "sequence_number": getattr(group, "_sequence_number", 0),
+                    "page_size_group": getattr(group, "page_size_group", "OTHER"),
+                    "reattach_confidence": getattr(
+                        group, "_reattach_confidence", 1.0
+                    ),
                     "bucket": bucket,
                 }
                 if bucket == "success":
                     success.append(entry)
+                elif bucket == "tentative":
+                    tentative.append(entry)
                 else:
                     review.append(entry)
             except Exception as exc:
@@ -225,22 +243,37 @@ class PDFExporter:
                     }
                 )
 
-        return {"success": success, "review": review, "orphans": orphans}
+        return {
+            "success": success,
+            "review": review,
+            "tentative": tentative,
+            "orphans": orphans,
+        }
 
-    def write_manifest(self, export_result: dict, manifest_path: str) -> None:
+    def write_manifest(
+        self,
+        export_result: dict,
+        manifest_path: str,
+        extra: dict | None = None,
+    ) -> None:
         success = export_result.get("success", [])
         review = export_result.get("review", [])
+        tentative = export_result.get("tentative", [])
         orphans = export_result.get("orphans", [])
         manifest = {
             "total_success": len(success),
             "total_review_khac": len(review),
+            "total_tentative": len(tentative),
             "total_orphans": len(orphans),
             "source_pdf": self.source_pdf_path,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "success_documents": success,
             "review_documents": review,
+            "tentative_documents": tentative,
             "orphan_pages": orphans,
         }
+        if extra:
+            manifest.update(extra)
         path = Path(manifest_path)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

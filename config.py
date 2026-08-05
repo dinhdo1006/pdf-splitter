@@ -46,6 +46,84 @@ SCORE_AFTER_SEPARATOR = +0.30
 SCORE_IS_CONTINUATION = -0.55
 SCORE_HEADER_SIMILAR = -0.30
 SCORE_LOW_OCR_CONFIDENCE = -0.20
+SCORE_SIZE_GROUP_CHANGE = +0.50  # hard boundary khi đổi kích thước vật lý
+SCORE_PREV_END_OF_DOC = +0.35    # trang trước có tín hiệu kết thúc tài liệu
+
+# ── Page size groups (PyMuPDF page.rect, đơn vị pt) ─────────────────
+# Tín hiệu gold từ PaperStream scan — không phụ thuộc OCR.
+PAGE_SIZE_GROUPS: dict = {
+    "BOOKLET_SMALL": {
+        "width_range": (370, 400),
+        "height_range": (560, 600),
+        "doc_type_hint": "LY_LICH_DANG_VIEN",
+        "ocr_dpi": 300,
+        "continuation_bias": 0.65,
+    },
+    "LANDSCAPE_SMALL": {
+        "width_range": (510, 545),
+        "height_range": (395, 415),
+        "doc_type_hint": "LY_LICH_DANG_VIEN",  # sơ yếu → LY_LICH (không invent key)
+        "ocr_dpi": 250,
+        "continuation_bias": 0.55,
+    },
+    "A4_PORTRAIT": {
+        "width_range": (570, 610),
+        "height_range": (835, 860),
+        "doc_type_hint": None,
+        "ocr_dpi": 200,
+        "continuation_bias": 0.0,
+    },
+    "A4_MEDIUM": {
+        "width_range": (560, 615),
+        "height_range": (800, 835),
+        "doc_type_hint": None,
+        "ocr_dpi": 200,
+        "continuation_bias": 0.10,
+    },
+    "OTHER": {
+        "width_range": None,
+        "height_range": None,
+        "doc_type_hint": None,
+        "ocr_dpi": 200,
+        "continuation_bias": 0.0,
+    },
+}
+
+# Size groups đủ đặc trưng để soft-continuation / Pass-2 reattach
+STRONG_SIZE_CONTINUATION_GROUPS = frozenset({"BOOKLET_SMALL", "LANDSCAPE_SMALL"})
+
+# Pass-2 orphan reattach
+REATTACH_HARD_MIN_CONFIDENCE = 0.80   # gắn cứng vào group success
+REATTACH_TENTATIVE_MIN_CONFIDENCE = 0.65  # attach nhưng → _review/tentative/
+
+# End-of-document
+EOD_BOTTOM_THRESHOLD = 0.72
+EOD_MIN_CONFIDENCE = 0.65
+
+
+def classify_page_size(width_pt: float, height_pt: float) -> str:
+    """Phân loại kích thước trang vật lý (pt) → PAGE_SIZE_GROUPS key."""
+    for group_name, cfg in PAGE_SIZE_GROUPS.items():
+        if group_name == "OTHER":
+            continue
+        wr = cfg.get("width_range")
+        hr = cfg.get("height_range")
+        if wr is None or hr is None:
+            continue
+        w_min, w_max = wr
+        h_min, h_max = hr
+        if w_min <= width_pt <= w_max and h_min <= height_pt <= h_max:
+            return group_name
+    return "OTHER"
+
+
+def page_size_ocr_dpi(width_pt: float, height_pt: float, default_dpi: int | None = None) -> int:
+    """DPI OCR khuyến nghị theo size group."""
+    group = classify_page_size(width_pt, height_pt)
+    dpi = PAGE_SIZE_GROUPS.get(group, {}).get("ocr_dpi")
+    if dpi is None:
+        return int(default_dpi or PDF_RENDER_DPI)
+    return int(dpi)
 
 # ── Continuation validator ─────────────────────────────────────────
 ENABLE_CONTINUATION_LLM = False  # Bật bằng --enable-continuation-llm (cần Ollama)

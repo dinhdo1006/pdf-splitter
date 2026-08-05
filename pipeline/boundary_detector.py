@@ -3,7 +3,7 @@ Module 5: Stateful boundary detection — 3-state anti-swallow model.
 
 PageClass:
   NEW_DOCUMENT            — catalog hit hoặc score >= HIGH_THRESHOLD
-  CONFIRMED_CONTINUATION  — ContinuationValidator xác nhận kế thừa hợp lệ
+  CONFIRMED_CONTINUATION  — ContinuationValidator / soft size / appendix xác nhận
   ORPHAN_PAGE             — không NEW và không xác nhận được → cách ly
 
 Blank pages → SKIP (không orphan, không gộp).
@@ -24,6 +24,22 @@ import config
 from pipeline.continuation_validator import ContinuationValidator, MULTI_PAGE_FORM_TYPES
 from pipeline.signal_extractor import PageSignal
 from pipeline.year_aware_sequencer import extract_year_robust
+
+_STRONG_SIZE = getattr(
+    config, "STRONG_SIZE_CONTINUATION_GROUPS", frozenset({"BOOKLET_SMALL", "LANDSCAPE_SMALL"})
+)
+
+# Doc types có thể nhận soft-appendix (Mẫu 2a, biên bản…)
+_APPENDIX_HOST_TYPES = frozenset(
+    {
+        "BAN_TU_KIEM_DIEM_HANG_NAM",
+        "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI",
+        "BAN_TU_KIEM_DIEM_TAI_THOI_DIEM_CHUYEN",
+        "BAN_TU_KIEM_DIEM_DANG_VIEN_VI_PHAM",
+        "LY_LICH_DANG_VIEN",
+        "LY_LICH_NGUOI_XIN_VAO_DANG",
+    }
+)
 
 
 class PageClass(Enum):
@@ -51,7 +67,10 @@ class DocumentGroup:
     doc_type: str = "CHUA_XAC_DINH"
     doc_year: Optional[int] = None
     page_numbers: list[int] = field(default_factory=list)
+    page_size_group: str = "OTHER"
     _sequence_number: int = field(default=0, repr=False, compare=False)
+    _reattach_confidence: float = field(default=1.0, repr=False, compare=False)
+    _is_tentative: bool = field(default=False, repr=False, compare=False)
 
 
 def _header_similarity(a: str, b: str) -> float:
@@ -130,6 +149,45 @@ class BoundaryDetector:
             score += config.SCORE_LOW_OCR_CONFIDENCE
             factors.append("-low_ocr_conf")
 
+        # === Page size group signals ===
+        prev = self._prev_signal
+        if (
+            prev is not None
+            and prev.page_size_group != signal.page_size_group
+            and prev.page_size_group != "OTHER"
+            and signal.page_size_group != "OTHER"
+        ):
+            score += getattr(config, "SCORE_SIZE_GROUP_CHANGE", 0.50)
+            factors.append(
+                f"+size_change({prev.page_size_group}->{signal.page_size_group})"
+            )
+
+        if (
+            self._current_group is not None
+            and self._current_group.page_size_group == signal.page_size_group
+            and signal.page_size_group in _STRONG_SIZE
+        ):
+            bias = float(
+                config.PAGE_SIZE_GROUPS.get(signal.page_size_group, {}).get(
+                    "continuation_bias", 0.0
+                )
+            )
+            if bias > 0:
+                score -= bias
+                factors.append(f"-size_cont_bias({bias})")
+
+        # Prev page end-of-doc → boost NEW
+        eod_min = getattr(config, "EOD_MIN_CONFIDENCE", 0.65)
+        if (
+            prev is not None
+            and getattr(prev, "is_likely_end_of_doc", False)
+            and getattr(prev, "end_of_doc_confidence", 0.0) >= eod_min
+        ):
+            score += getattr(config, "SCORE_PREV_END_OF_DOC", 0.35)
+            factors.append(
+                f"+prev_eod({prev.end_of_doc_confidence:.2f})"
+            )
+
         score = float(min(1.0, max(0.0, score)))
         reasoning = "; ".join(factors) if factors else "no_signals"
         return score, reasoning
@@ -151,6 +209,14 @@ class BoundaryDetector:
             )
 
         doc_type = signal.matched_doc_type or "CHUA_XAC_DINH"
+        # Size hint khi chưa match catalog trên booklet/landscape
+        if doc_type == "CHUA_XAC_DINH" and signal.page_size_group in _STRONG_SIZE:
+            hint = config.PAGE_SIZE_GROUPS.get(signal.page_size_group, {}).get(
+                "doc_type_hint"
+            )
+            if hint:
+                doc_type = hint
+
         self._group_counter += 1
         self._current_group = DocumentGroup(
             group_id=self._group_counter,
@@ -158,10 +224,12 @@ class BoundaryDetector:
             doc_type=doc_type,
             doc_year=None,
             page_numbers=[signal.page_num],
+            page_size_group=signal.page_size_group or "OTHER",
         )
         logger.info(
             f"NEW_DOCUMENT #{self._group_counter} at page {signal.page_num} "
-            f"(score={score:.2f}, doc_type={doc_type!r}) | {reason}"
+            f"(score={score:.2f}, doc_type={doc_type!r}, "
+            f"size={signal.page_size_group}) | {reason}"
         )
 
     def _append_continuation(self, signal: PageSignal, reason: str) -> bool:
@@ -185,6 +253,25 @@ class BoundaryDetector:
         logger.warning(
             f"Page {signal.page_num}: ORPHAN_PAGE (group #{open_id} vẫn mở) — {reason}"
         )
+
+    def _soft_size_continuation(self, signal: PageSignal) -> bool:
+        """
+        Soft CONFIRMED_CONTINUATION khi cùng BOOKLET/LANDSCAPE với group đang mở
+        và không có catalog hit loại khác.
+        """
+        if self._current_group is None:
+            return False
+        sg = signal.page_size_group
+        if sg not in _STRONG_SIZE:
+            return False
+        if self._current_group.page_size_group != sg:
+            return False
+        # Catalog hit loại KHÁC → không soft cont
+        if signal.matched_doc_type:
+            open_type = (self._current_group.doc_type or "").upper()
+            if signal.matched_doc_type.upper() != open_type:
+                return False
+        return True
 
     def process_page(self, signal: PageSignal) -> BoundaryDecision:
         # 1) Blank → SKIP (không orphan)
@@ -214,6 +301,23 @@ class BoundaryDetector:
             "LY_LICH_NGUOI_XIN_VAO_DANG",
         }
 
+        # Soft appendix (Mẫu 2a, biên bản…) → gộp vào host nếu đang mở
+        if getattr(signal, "is_appendix", False) and self._current_group is not None:
+            if open_doc in _APPENDIX_HOST_TYPES or open_doc.startswith("BAN_TU_KIEM"):
+                if self._append_continuation(
+                    signal, f"appendix_soft[{signal.appendix_kind}]"
+                ):
+                    decision = BoundaryDecision(
+                        page_num=signal.page_num,
+                        page_class=PageClass.CONFIRMED_CONTINUATION,
+                        score=score,
+                        confidence=confidence,
+                        reasoning=f"confirmed_cont[appendix] | {score_reason}",
+                    )
+                    self._prev_signal = signal
+                    self._prev_was_blank = False
+                    return decision
+
         # TOC / mục form lý lịch: không bao giờ NEW từ catalog/heuristic
         if getattr(signal, "is_toc", False) or getattr(signal, "is_form_section", False):
             kind = "toc" if getattr(signal, "is_toc", False) else "form_section"
@@ -226,6 +330,20 @@ class BoundaryDetector:
                     score=score,
                     confidence=confidence,
                     reasoning=f"confirmed_cont[{kind}_ly_lich] | {score_reason}",
+                )
+                self._prev_signal = signal
+                self._prev_was_blank = False
+                return decision
+            # Soft size: form section trong booklet đang mở
+            if self._soft_size_continuation(signal) and self._append_continuation(
+                signal, f"{kind}_same_size_group"
+            ):
+                decision = BoundaryDecision(
+                    page_num=signal.page_num,
+                    page_class=PageClass.CONFIRMED_CONTINUATION,
+                    score=score,
+                    confidence=confidence,
+                    reasoning=f"confirmed_cont[{kind}_size] | {score_reason}",
                 )
                 self._prev_signal = signal
                 self._prev_was_blank = False
@@ -247,6 +365,7 @@ class BoundaryDetector:
         is_new = bool(signal.matched_doc_type) or score >= self.high_threshold
 
         # Form nhiều trang: tiêu đề catalog lặp lại trên trang tiếp → không NEW
+        # Ngoại lệ: đổi page_size_group (vd. landscape sơ yếu → booklet lý lịch)
         if (
             is_new
             and self._current_group is not None
@@ -254,19 +373,43 @@ class BoundaryDetector:
             and signal.matched_doc_type == self._current_group.doc_type
             and signal.matched_doc_type in MULTI_PAGE_FORM_TYPES
         ):
-            curr_year = extract_year_robust(
-                signal.header_text + "\n" + (signal.full_text or "")[:300]
+            size_changed = (
+                signal.page_size_group != "OTHER"
+                and self._current_group.page_size_group != "OTHER"
+                and signal.page_size_group != self._current_group.page_size_group
             )
-            group_year = self._current_group.doc_year
-            # Năm khác rõ → bản mới cùng loại (vd. Phiếu bổ sung 2018 vs 2019)
-            if curr_year is not None and group_year is not None and curr_year != group_year:
+            if size_changed:
                 is_new = True
-                score_reason += f"; +same_type_new_year({curr_year})"
+                score_reason += (
+                    f"; +same_type_size_change("
+                    f"{self._current_group.page_size_group}->{signal.page_size_group})"
+                )
             else:
-                is_new = False
-                score_reason += "; -repeated_catalog_header_same_type"
-                if curr_year is not None and self._current_group.doc_year is None:
-                    self._current_group.doc_year = curr_year
+                curr_year = extract_year_robust(
+                    signal.header_text + "\n" + (signal.full_text or "")[:300]
+                )
+                group_year = self._current_group.doc_year
+                if (
+                    curr_year is not None
+                    and group_year is not None
+                    and curr_year != group_year
+                ):
+                    is_new = True
+                    score_reason += f"; +same_type_new_year({curr_year})"
+                else:
+                    is_new = False
+                    score_reason += "; -repeated_catalog_header_same_type"
+                    if curr_year is not None and self._current_group.doc_year is None:
+                        self._current_group.doc_year = curr_year
+
+        # Soft size continuation: cùng booklet/landscape → không NEW nếu chỉ heuristic
+        if (
+            is_new
+            and not signal.matched_doc_type
+            and self._soft_size_continuation(signal)
+        ):
+            is_new = False
+            score_reason += "; -soft_size_block_heuristic_new"
 
         # Trang đầu tiên không blank: nếu chưa match cũng mở group tạm
         if self._current_group is None and not self._groups and not self._orphan_pages:
@@ -284,7 +427,6 @@ class BoundaryDetector:
             page_class = PageClass.NEW_DOCUMENT
             reasoning = f"new | {score_reason}"
         elif "repeated_catalog_header_same_type" in score_reason:
-            # Tiêu đề form lặp lại trên trang tiếp của cùng loại → gộp chắc chắn
             if self._append_continuation(signal, "repeated_catalog_header_same_type"):
                 page_class = PageClass.CONFIRMED_CONTINUATION
                 reasoning = f"confirmed_cont[same_type_header] | {score_reason}"
@@ -292,8 +434,15 @@ class BoundaryDetector:
                 self._mark_orphan(signal, "repeated_header_but_no_open_group")
                 page_class = PageClass.ORPHAN_PAGE
                 reasoning = "orphan | no_open_group"
+        elif self._soft_size_continuation(signal):
+            if self._append_continuation(signal, "soft_same_size_group"):
+                page_class = PageClass.CONFIRMED_CONTINUATION
+                reasoning = f"confirmed_cont[soft_size] | {score_reason}"
+            else:
+                self._mark_orphan(signal, "soft_size_but_no_open_group")
+                page_class = PageClass.ORPHAN_PAGE
+                reasoning = "orphan | no_open_group"
         else:
-            # Không NEW → chỉ gộp nếu ContinuationValidator xác nhận
             open_doc_type = (
                 self._current_group.doc_type if self._current_group else None
             )
@@ -338,6 +487,7 @@ class BoundaryDetector:
                     "matched_keyword": signal.matched_keyword,
                     "matched_doc_type": signal.matched_doc_type,
                     "page_class": page_class.value,
+                    "page_size_group": signal.page_size_group,
                 }
             )
 

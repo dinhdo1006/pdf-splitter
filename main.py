@@ -6,6 +6,7 @@ Usage:
     python main.py -i large.pdf -o ./output --pages 40 --debug
     python main.py -i large.pdf -o ./output --m1 93 --m2 0 --m3 36 --m4 1 --m5 15 \\
         --cccd 012345678901 --ho-ten "Nguyen Van A"
+    python main.py -i large.pdf -o ./output --adaptive-dpi
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Party hồ sơ PDF splitter — 3-state anti-swallow "
-            "(NEW / CONFIRMED_CONTINUATION / ORPHAN)"
+            "(NEW / CONFIRMED_CONTINUATION / ORPHAN) + Pass-2 reattach"
         ),
     )
     parser.add_argument("--input", "-i", required=True, help="Path to input PDF")
@@ -89,6 +90,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         metavar="N",
         help="Limit to first N pages (testing)",
+    )
+    parser.add_argument(
+        "--adaptive-dpi",
+        action="store_true",
+        help="DPI theo page size group (BOOKLET→300, LANDSCAPE→250, A4→200)",
     )
     # Phase 2 — hierarchical path (Phụ lục 2.1)
     parser.add_argument("--m1", default=None, help="Mã cấp ủy M1 (2 chữ số)")
@@ -147,6 +153,7 @@ def resolve_docs_dir(args: argparse.Namespace, output_dir: Path) -> Path:
 def print_export_summary(export_result: dict) -> None:
     success = export_result.get("success", [])
     review = export_result.get("review", [])
+    tentative = export_result.get("tentative", [])
     orphans = export_result.get("orphans", [])
 
     logger.info("")
@@ -159,6 +166,16 @@ def print_export_summary(export_result: dict) -> None:
             logger.info(
                 f"  {i:02d}. {r['filename']}  pages={r['page_count']}  "
                 f"range={lo}-{hi}  type={r.get('doc_type')}"
+            )
+
+    if tentative:
+        logger.info("")
+        logger.info("========== TENTATIVE (reattach conf < 0.80) ==========")
+        for i, r in enumerate(tentative, 1):
+            lo, hi = r["page_range"]
+            logger.info(
+                f"  {i:02d}. {r['filename']}  pages={r['page_count']}  "
+                f"range={lo}-{hi}  conf={r.get('reattach_confidence')}"
             )
 
     if review:
@@ -212,7 +229,8 @@ def main() -> int:
     )
     logger.info(f"Log file: {log_path}")
     logger.info(
-        f"Settings: dpi={args.dpi}, threshold={args.threshold}, "
+        f"Settings: dpi={args.dpi}, adaptive_dpi={args.adaptive_dpi}, "
+        f"threshold={args.threshold}, "
         f"high_threshold={config.HIGH_BOUNDARY_THRESHOLD}, "
         f"preprocess={preprocess_enabled}"
     )
@@ -254,7 +272,6 @@ def main() -> int:
             hw_detector = None
             hw_ocr = None
 
-    # LLM chỉ phục vụ ContinuationValidator Rule 3 (không override merge)
     llm_referee = None
     use_cont_llm = args.enable_continuation_llm or getattr(
         config, "ENABLE_CONTINUATION_LLM", False
@@ -286,9 +303,15 @@ def main() -> int:
     )
     exporter = PDFExporter(str(input_path), str(output_dir))
 
+    all_signals: dict = {}
+    hoso_manifest = None
+
     try:
-        page_iter = ingestor.stream_pages(max_pages=process_pages)
-        for page_num, raw_image in tqdm(
+        page_iter = ingestor.stream_pages(
+            max_pages=process_pages,
+            adaptive_dpi=bool(args.adaptive_dpi),
+        )
+        for page_num, raw_image, width_pt, height_pt in tqdm(
             page_iter,
             total=process_pages,
             desc="Processing pages",
@@ -304,13 +327,42 @@ def main() -> int:
                 else:
                     image = raw_image
 
-                signal = extractor.extract(page_num, image, hw_ocr, hw_detector)
+                signal = extractor.extract(
+                    page_num,
+                    image,
+                    hw_ocr,
+                    hw_detector,
+                    width_pt=width_pt,
+                    height_pt=height_pt,
+                )
                 decision = detector.process_page(signal)
+                signal.boundary_score = decision.score
+                all_signals[page_num] = signal
+
+                # Manifest từ trang Mục Lục (lấy bản đầu đủ tin)
+                if hoso_manifest is None and (
+                    signal.is_toc or "muc luc" in (signal.header_text or "").lower()
+                ):
+                    try:
+                        from pipeline.manifest_extractor import extract_manifest
+
+                        m = extract_manifest(
+                            page_num, signal.full_text, signal.header_text
+                        )
+                        if m and m.extraction_confidence >= 0.3:
+                            hoso_manifest = m
+                            logger.info(
+                                f"Manifest found at page {page_num}: "
+                                f"{len(m.entries)} entries, "
+                                f"confidence={m.extraction_confidence:.2f}"
+                            )
+                    except Exception as mex:
+                        logger.debug(f"Manifest extract skip page {page_num}: {mex}")
 
                 logger.debug(
                     f"Page {page_num} | {decision.page_class.value} "
-                    f"| score={decision.score:.2f} | conf={decision.confidence} "
-                    f"| {decision.reasoning}"
+                    f"| score={decision.score:.2f} | size={signal.page_size_group} "
+                    f"| conf={decision.confidence} | {decision.reasoning}"
                 )
             except Exception as exc:
                 logger.warning(
@@ -340,8 +392,23 @@ def main() -> int:
     groups, orphan_pages = detector.finalize()
     logger.info(
         f"Detected {len(groups)} documents, {len(orphan_pages)} orphans "
-        f"across {process_pages} pages"
+        f"across {process_pages} pages (before Pass-2)"
     )
+
+    # Pass 2 — orphan reattachment (attach_prev only)
+    reattach_decisions: list = []
+    try:
+        from pipeline.orphan_reattacher import decisions_to_dicts, reattach_orphans
+
+        groups, orphan_pages, reattach_decisions = reattach_orphans(
+            groups, orphan_pages, all_signals
+        )
+        logger.info(
+            f"After Pass-2: {len(groups)} documents, "
+            f"{len(orphan_pages)} orphans remaining"
+        )
+    except Exception as rex:
+        logger.error(f"Pass-2 reattach failed (giữ orphans gốc): {rex}")
 
     from pipeline.year_aware_sequencer import YearAwareSequencer, DocRecord
 
@@ -390,9 +457,73 @@ def main() -> int:
         docs_dir=docs_dir,
     )
 
+    # Manifest extras: reattach + validation
+    manifest_extra: dict = {}
+    try:
+        from pipeline.orphan_reattacher import decisions_to_dicts
+
+        manifest_extra["reattach_decisions"] = decisions_to_dicts(reattach_decisions)
+        attached = sum(
+            1
+            for d in reattach_decisions
+            if d.action in ("attach_prev", "attach_chain_prev")
+        )
+        manifest_extra["reattach_summary"] = {
+            "decisions": len(reattach_decisions),
+            "attached": attached,
+            "remaining_orphans": len(orphan_pages),
+        }
+    except Exception:
+        pass
+
+    if hoso_manifest is not None:
+        try:
+            from pipeline.manifest_extractor import (
+                manifest_to_dict,
+                validate_output_vs_manifest,
+            )
+
+            exported_types = [
+                r.get("doc_type", "")
+                for r in export_result.get("success", [])
+                + export_result.get("tentative", [])
+            ]
+            validation = validate_output_vs_manifest(hoso_manifest, exported_types)
+            manifest_extra["hoso_manifest"] = manifest_to_dict(hoso_manifest)
+            manifest_extra["validation"] = validation
+            if validation.get("missing_in_output"):
+                logger.warning(
+                    f"Missing doc types vs Mục Lục: "
+                    f"{validation['missing_in_output']}"
+                )
+            logger.info(
+                f"Manifest validation completeness="
+                f"{validation.get('completeness_pct')}%"
+            )
+        except Exception as vex:
+            logger.error(f"Manifest validation failed: {vex}")
+
+    orphan_rate = (
+        round(100.0 * len(orphan_pages) / max(process_pages, 1), 1)
+        if process_pages
+        else 0.0
+    )
+    catalog_docs = len(export_result.get("success", [])) + len(
+        export_result.get("tentative", [])
+    )
+    total_docs = catalog_docs + len(export_result.get("review", []))
+    manifest_extra["quality"] = {
+        "pages_processed": process_pages,
+        "orphan_rate_pct": orphan_rate,
+        "catalog_doc_count": catalog_docs,
+        "total_doc_groups": total_docs,
+    }
+
     manifest_path = output_dir / "manifest.json"
     try:
-        exporter.write_manifest(export_result, str(manifest_path))
+        exporter.write_manifest(
+            export_result, str(manifest_path), extra=manifest_extra or None
+        )
     except Exception as exc:
         logger.error(f"Manifest write failed: {exc}")
 
@@ -424,8 +555,10 @@ def main() -> int:
 
     n_ok = len(export_result.get("success", []))
     n_or = len(export_result.get("orphans", []))
+    n_tent = len(export_result.get("tentative", []))
     logger.info(
-        f"Done. success={n_ok}, orphans={n_or}, output={output_dir.resolve()}"
+        f"Done. success={n_ok}, tentative={n_tent}, orphans={n_or}, "
+        f"orphan_rate={orphan_rate}%, output={output_dir.resolve()}"
     )
     return 0
 

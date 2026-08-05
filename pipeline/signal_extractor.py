@@ -10,6 +10,7 @@ import numpy as np
 from loguru import logger
 
 import config
+from pipeline.end_of_doc_detector import detect_end_of_doc
 from pipeline.ocr_engine import OCRBlock, OCREngine
 from pipeline.party_doc_matcher import PartyDocMatcher, get_matcher
 
@@ -58,6 +59,18 @@ class PageSignal:
     all_blocks: list = field(default_factory=list)
     is_toc: bool = False
     is_form_section: bool = False
+    # Page size (pt) — gold signal, không phụ thuộc OCR/DPI
+    page_width_pt: float = 0.0
+    page_height_pt: float = 0.0
+    page_size_group: str = "OTHER"
+    ocr_dpi_recommended: int = 200
+    boundary_score: float = 0.0
+    # End-of-document
+    end_of_doc_confidence: float = 0.0
+    is_likely_end_of_doc: bool = False
+    # Soft appendix (Mẫu 2a, biên bản…) — không phải catalog 104
+    is_appendix: bool = False
+    appendix_kind: str = ""
 
 
 def _empty_signal(page_num: int) -> PageSignal:
@@ -93,19 +106,45 @@ class SignalExtractor:
         self.matcher = matcher or get_matcher()
 
     def _match_catalog(
-        self, header_text: str, full_text: str = ""
-    ) -> tuple[bool, str, str, float, bool, bool]:
+        self,
+        header_text: str,
+        full_text: str = "",
+        page_size_group: str = "OTHER",
+    ) -> tuple[bool, str, str, float, bool, bool, bool, str]:
         """
         Returns:
-            (has_hit, display_phrase, doc_type_key, score, is_toc, is_form_section)
+            (has_hit, display_phrase, doc_type_key, score,
+             is_toc, is_form_section, is_appendix, appendix_kind)
         """
-        result = self.matcher.match(header_text, full_text)
+        result = self.matcher.match(
+            header_text, full_text, page_size_group=page_size_group
+        )
         is_toc = result.source == "toc"
         is_form = result.source == "form_section"
+        is_appendix = result.source == "appendix"
+        appendix_kind = result.matched_phrase if is_appendix else ""
         min_score = getattr(config, "CATALOG_MATCH_MIN_SCORE", 82)
         if result.doc_type_key and result.score >= min_score:
-            return True, result.matched_phrase, result.doc_type_key, result.score, False, False
-        return False, result.matched_phrase, "", 0.0, is_toc, is_form
+            return (
+                True,
+                result.matched_phrase,
+                result.doc_type_key,
+                result.score,
+                False,
+                False,
+                False,
+                "",
+            )
+        return (
+            False,
+            result.matched_phrase,
+            "",
+            0.0,
+            is_toc,
+            is_form,
+            is_appendix,
+            appendix_kind,
+        )
 
     def _has_large_centered_text(
         self,
@@ -120,32 +159,28 @@ class SignalExtractor:
         min_height = image_height * config.LARGE_FONT_HEIGHT_RATIO
 
         for block in header_blocks:
-            if block.confidence <= 0.6:
-                continue
             x_min, y_min, x_max, y_max = block.bbox
-            bbox_h = y_max - y_min
-            if bbox_h <= min_height:
+            h = max(0, y_max - y_min)
+            if h < min_height or block.confidence < 0.6:
                 continue
-            center_x = ((x_min + x_max) / 2.0) / image_width
+            center_x = (x_min + x_max) / 2.0 / image_width
             if x_lo <= center_x <= x_hi:
                 return True
         return False
 
     def _is_continuation(self, header_text: str) -> bool:
-        text = header_text.strip()
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        candidates = [text] + lines
-
-        for pattern in CONTINUATION_PATTERNS:
-            for candidate in candidates:
-                if re.search(pattern, candidate, flags=re.IGNORECASE | re.MULTILINE):
-                    return True
+        text = (header_text or "").strip()
+        if not text:
+            return False
+        for pat in CONTINUATION_PATTERNS:
+            if re.search(pat, text, re.IGNORECASE | re.MULTILINE):
+                return True
         return False
 
-    def _text_density(self, blocks: list[OCRBlock], image_height: int, image_width: int) -> float:
-        if image_height <= 0 or image_width <= 0:
-            return 0.0
-        page_area = float(image_height * image_width)
+    def _text_density(
+        self, blocks: list[OCRBlock], image_height: int, image_width: int
+    ) -> float:
+        page_area = max(1, image_height * image_width)
         total = 0.0
         for block in blocks:
             x_min, y_min, x_max, y_max = block.bbox
@@ -158,12 +193,25 @@ class SignalExtractor:
         image: np.ndarray,
         handwriting_ocr: Any = None,
         handwriting_detector: Any = None,
+        width_pt: float = 0.0,
+        height_pt: float = 0.0,
     ) -> PageSignal:
         try:
             if len(image.shape) == 2:
                 image_height, image_width = image.shape
             else:
                 image_height, image_width = image.shape[:2]
+
+            size_group = (
+                config.classify_page_size(width_pt, height_pt)
+                if width_pt > 0 and height_pt > 0
+                else "OTHER"
+            )
+            dpi_rec = (
+                config.page_size_ocr_dpi(width_pt, height_pt)
+                if width_pt > 0 and height_pt > 0
+                else config.PDF_RENDER_DPI
+            )
 
             printed_blocks, hw_blocks = self.ocr.run_dual(
                 image, handwriting_ocr, handwriting_detector
@@ -196,9 +244,16 @@ class SignalExtractor:
                 if hw_all:
                     full_text = (full_text + "\n" + hw_all).strip()
 
-            has_kw, matched_kw, doc_type, match_score, is_toc, is_form = (
-                self._match_catalog(header_text, full_text)
-            )
+            (
+                has_kw,
+                matched_kw,
+                doc_type,
+                match_score,
+                is_toc,
+                is_form,
+                is_appendix,
+                appendix_kind,
+            ) = self._match_catalog(header_text, full_text, size_group)
             has_large_centered = self._has_large_centered_text(
                 header_blocks, image_height, image_width
             )
@@ -212,6 +267,20 @@ class SignalExtractor:
                 )
             else:
                 avg_conf = 0.0
+
+            # Size-group doc_type hint khi chưa match catalog (chỉ strong groups)
+            if (
+                not has_kw
+                and not is_toc
+                and not is_form
+                and size_group in getattr(config, "STRONG_SIZE_CONTINUATION_GROUPS", ())
+            ):
+                hint = config.PAGE_SIZE_GROUPS.get(size_group, {}).get("doc_type_hint")
+                # Không ép has_doc_keyword — chỉ gợi ý khi mở group đầu tiên trong group size
+                # BoundaryDetector dùng page_size_group; hint optional qua matched nếu trống
+                _ = hint  # reserved; soft cont dùng size group, không fake catalog hit
+
+            eod = detect_end_of_doc(image, all_blocks, image_height)
 
             return PageSignal(
                 page_num=page_num,
@@ -230,6 +299,14 @@ class SignalExtractor:
                 all_blocks=list(all_blocks),
                 is_toc=is_toc,
                 is_form_section=is_form,
+                page_width_pt=float(width_pt or 0.0),
+                page_height_pt=float(height_pt or 0.0),
+                page_size_group=size_group,
+                ocr_dpi_recommended=int(dpi_rec),
+                end_of_doc_confidence=eod.confidence,
+                is_likely_end_of_doc=eod.is_end_of_doc,
+                is_appendix=is_appendix,
+                appendix_kind=appendix_kind,
             )
 
         except Exception as exc:

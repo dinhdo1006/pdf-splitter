@@ -63,34 +63,96 @@ _FORM_SECTION_HINTS = (
 )
 
 # Alias OCR / tiêu đề thực tế → doc_type_key (ưu tiên cao, dài hơn match trước)
-# KHÔNG dùng alias ngắn dễ dính mục lục / mục form: "van bang", "chung chi"
+# KHÔNG dùng alias ngắn dễ dính mục lục / mục form trừ khi size-gated
 _ALIASES: list[tuple[str, str]] = [
     ("so yeu ly lich dang vien", "LY_LICH_DANG_VIEN"),
     ("so yeu ly lich", "LY_LICH_DANG_VIEN"),
     ("so luoc ly lich", "LY_LICH_DANG_VIEN"),
     ("ly lich cua nguoi xin vao dang", "LY_LICH_NGUOI_XIN_VAO_DANG"),
     ("ly lich nguoi xin vao dang", "LY_LICH_NGUOI_XIN_VAO_DANG"),
+    ("ly lich xin vao dang", "LY_LICH_NGUOI_XIN_VAO_DANG"),
     ("ly lich dang vien", "LY_LICH_DANG_VIEN"),
+    ("ho so ly lich", "LY_LICH_DANG_VIEN"),
+    ("so ly lich", "LY_LICH_DANG_VIEN"),
     ("phieu bo sung ho so dang vien", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
+    ("phieu bo sung thong tin dang vien", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
     ("phieu bo sung ho so", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
     ("mau 3-hsdv", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
     ("mau 3 hsdv", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
+    ("bo sung ho so", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
+    ("phieu bo sung", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
     ("phieu dang vien cu", "PHIEU_DANG_VIEN_CU_LUU_LICH_SU"),
+    ("phieu dang vien mau 2", "PHIEU_DANG_VIEN"),
+    ("mau 2-hsdv", "PHIEU_DANG_VIEN"),
+    ("mau 2 hsdv", "PHIEU_DANG_VIEN"),
     ("phieu dang vien", "PHIEU_DANG_VIEN"),
     ("ban kiem diem dang vien", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("ban tu kiem diem hang nam", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("tu kiem diem hang nam", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("kiem diem cuoi nam", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("tu kiem diem nam", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("ban tu danh gia", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("tu danh gia kiem diem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("kiem diem dang vien", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("ban tu kiem diem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("giay gioi thieu sinh hoat dang tam thoi", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_TAM_THOI"),
+    ("sinh hoat dang tam thoi", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_TAM_THOI"),
+    ("giay gioi thieu tam thoi", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_TAM_THOI"),
     ("giay gioi thieu sinh hoat dang chinh thuc", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_CHINH_THUC"),
     ("giay gioi thieu sinh hoat dang noi bo", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_NOI_BO"),
+    ("sinh hoat dang noi bo", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_NOI_BO"),
+    ("gtshd noi bo", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_NOI_BO"),
     ("giay gioi thieu sinh hoat dang", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_CHINH_THUC"),
+    ("sinh hoat dang bo", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_CHINH_THUC"),
     ("quyet dinh ket nap lai", "QUYET_DINH_KET_NAP_LAI"),
     ("quyet dinh ket nap dang vien", "QUYET_DINH_KET_NAP_DANG_VIEN"),
+    ("ket nap vao dang", "QUYET_DINH_KET_NAP_DANG_VIEN"),
+    ("quyet dinh ket nap", "QUYET_DINH_KET_NAP_DANG_VIEN"),
     ("quyet dinh cong nhan dang vien chinh thuc", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
+    ("cong nhan dang vien chinh thuc", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
+    ("cong nhan chinh thuc", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
     ("quyet dinh cong nhan dang vien", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
     ("don xin vao dang", "DON_XIN_VAO_DANG"),
+    ("quyet dinh ky luat", "QUYET_DINH_KY_LUAT_DANG"),
+    ("hinh thuc ky luat", "QUYET_DINH_KY_LUAT_DANG"),
+    ("quyet dinh khen thuong", "QUYET_DINH_KHEN_THUONG"),
+    ("quyet dinh tang thuong", "QUYET_DINH_KHEN_THUONG"),
+    ("chung nhan khen thuong", "QUYET_DINH_KHEN_THUONG"),
+    ("giay gioi thieu nguoi vao dang", "GIAY_GIOI_THIEU_NGUOI_VAO_DANG"),
+    ("gioi thieu doan vien uu tu", "GIAY_GIOI_THIEU_NGUOI_VAO_DANG"),
+    ("chung chi ly luan chinh tri", "BANG_CHUNG_CHI_LY_LUAN_CHINH_TRI"),
+    ("bang ly luan chinh tri", "BANG_CHUNG_CHI_LY_LUAN_CHINH_TRI"),
+    ("trung cap ly luan", "BANG_CHUNG_CHI_LY_LUAN_CHINH_TRI"),
+    ("cao cap ly luan", "BANG_CHUNG_CHI_LY_LUAN_CHINH_TRI"),
+    ("cu nhan chinh tri", "BANG_CHUNG_CHI_LY_LUAN_CHINH_TRI"),
     ("bang tot nghiep dai hoc", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
     ("bang tot nghiep", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
+    ("chung chi ngoai ngu", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
+    ("chung chi tin hoc", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
+    ("bang dai hoc", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
+    ("bang trung cap", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
+    ("bang cao dang", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
+    ("chung chi hanh nghe", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
+    ("quyet dinh dieu dong", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    ("quyet dinh bo nhiem", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    ("quyet dinh chuyen cong tac", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    ("quyet dinh nang luong", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    ("quyet dinh nang bac luong", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    ("quyet dinh tuyen dung", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    ("quyet dinh tiep nhan", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+]
+
+# Alias ngắn — CHỈ khi page_size_group phù hợp (tránh false NEW trên A4)
+_SIZE_GATED_ALIASES: list[tuple[str, str, frozenset[str]]] = [
+    ("ly lich", "LY_LICH_DANG_VIEN", frozenset({"BOOKLET_SMALL", "LANDSCAPE_SMALL"})),
+]
+
+# Phụ lục không thuộc 104 — soft-attach, không tạo catalog key
+_APPENDIX_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"mau\s*2a.*kd.*dg", re.I), "PHU_LUC_TU_KIEM_DIEM"),
+    (re.compile(r"danh\s*gia.*phan\s*loai", re.I), "PHU_LUC_TU_KIEM_DIEM"),
+    (re.compile(r"bien\s*ban.*chi\s*bo", re.I), "PHU_LUC_NGHI_QUYET"),
+    (re.compile(r"nghi\s*quyet.*chi\s*bo", re.I), "PHU_LUC_NGHI_QUYET"),
 ]
 
 
@@ -99,7 +161,7 @@ class MatchResult:
     doc_type_key: str
     score: float  # 0–100
     matched_phrase: str
-    source: str  # "alias" | "catalog" | "none" | "toc" | "form_section"
+    source: str  # "alias" | "catalog" | "none" | "toc" | "form_section" | "appendix"
 
 
 def _collapse(text: str) -> str:
@@ -235,19 +297,34 @@ class PartyDocMatcher:
             (_collapse(a), k) for a, k in _ALIASES
         ]
         self._aliases.sort(key=lambda x: len(x[0]), reverse=True)
+        self._size_gated: list[tuple[str, str, frozenset[str]]] = [
+            (_collapse(a), k, groups) for a, k, groups in _SIZE_GATED_ALIASES
+        ]
 
         logger.debug(
             f"[party_doc_matcher] {len(self._aliases)} aliases, "
-            f"{len(self._catalog_phrases)} catalog phrases"
+            f"{len(self._catalog_phrases)} catalog phrases, "
+            f"{len(self._size_gated)} size-gated"
         )
 
     def match(
         self,
         header_text: str,
         full_text: str = "",
+        page_size_group: str = "OTHER",
     ) -> MatchResult:
         header = _collapse(header_text)
-        if not header or _is_noise_only(header):
+        if not header:
+            return MatchResult("", 0.0, "", "none")
+
+        # Size-gated short aliases TRƯỚC noise filter (vd. "LY LICH" len=7)
+        for phrase, key, allowed_groups in self._size_gated:
+            if page_size_group not in allowed_groups:
+                continue
+            if phrase and phrase in header:
+                return MatchResult(key, 95.0, phrase, "alias")
+
+        if _is_noise_only(header):
             return MatchResult("", 0.0, "", "none")
 
         # Chặn mục lục / mục form TRƯỚC khi fuzzy catalog
@@ -262,6 +339,15 @@ class PartyDocMatcher:
         if is_ly_lich_form_section(header_text, full_text):
             logger.debug("[matcher] form section detected — skip catalog match")
             return MatchResult("", 0.0, "FORM_SECTION", "form_section")
+
+        # Appendix soft patterns (không phải catalog 104)
+        blob_low = unidecode(
+            (header_text or "") + "\n" + (full_text or "")[:400]
+        ).lower()
+        for pat, kind in _APPENDIX_PATTERNS:
+            if pat.search(blob_low):
+                logger.debug(f"[matcher] appendix detected: {kind}")
+                return MatchResult("", 0.0, kind, "appendix")
 
         # 1) Alias (chỉ substring đủ dài; fuzzy cao hơn)
         for phrase, key in self._aliases:
@@ -304,8 +390,13 @@ class PartyDocMatcher:
             return best
         return MatchResult("", 0.0, "", "none")
 
-    def has_catalog_hit(self, header_text: str, full_text: str = "") -> bool:
-        r = self.match(header_text, full_text)
+    def has_catalog_hit(
+        self,
+        header_text: str,
+        full_text: str = "",
+        page_size_group: str = "OTHER",
+    ) -> bool:
+        r = self.match(header_text, full_text, page_size_group=page_size_group)
         return bool(r.doc_type_key)
 
 
