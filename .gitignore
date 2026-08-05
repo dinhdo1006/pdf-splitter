@@ -1,0 +1,38 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Models & heavy caches
+models/
+*.pt
+*.pth
+*.onnx
+.paddlex/
+
+# Outputs & logs
+output/
+output_*/
+logs/
+*.log
+
+# Archives / local clutter
+pipeline.zip
+_pdf_analysis.txt
+*.pdf
+
+# IDE / OS
+.idea/
+.vscode/
+.cursor/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Env secrets
+.env
+.env.*

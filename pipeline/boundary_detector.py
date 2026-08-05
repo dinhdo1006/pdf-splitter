@@ -1,0 +1,343 @@
+"""
+Module 5: Stateful boundary detection — 3-state anti-swallow model.
+
+PageClass:
+  NEW_DOCUMENT            — catalog hit hoặc score >= HIGH_THRESHOLD
+  CONFIRMED_CONTINUATION  — ContinuationValidator xác nhận kế thừa hợp lệ
+  ORPHAN_PAGE             — không NEW và không xác nhận được → cách ly
+
+Blank pages → SKIP (không orphan, không gộp).
+CẤM: score thấp → tự động gộp vào tài liệu trước.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Optional
+
+from loguru import logger
+from rapidfuzz import fuzz
+from unidecode import unidecode
+
+import config
+from pipeline.continuation_validator import ContinuationValidator, MULTI_PAGE_FORM_TYPES
+from pipeline.signal_extractor import PageSignal
+from pipeline.year_aware_sequencer import extract_year_robust
+
+
+class PageClass(Enum):
+    NEW_DOCUMENT = "new_document"
+    CONFIRMED_CONTINUATION = "confirmed_continuation"
+    ORPHAN_PAGE = "orphan_page"
+    # Giữ alias tương thích chỗ đọc cũ (nếu có)
+    CONTINUATION = "confirmed_continuation"
+    SEPARATOR = "skip_blank"
+
+
+@dataclass
+class BoundaryDecision:
+    page_num: int
+    page_class: PageClass
+    score: float
+    confidence: str
+    reasoning: str
+
+
+@dataclass
+class DocumentGroup:
+    group_id: int
+    raw_title: str
+    doc_type: str = "CHUA_XAC_DINH"
+    doc_year: Optional[int] = None
+    page_numbers: list[int] = field(default_factory=list)
+    _sequence_number: int = field(default=0, repr=False, compare=False)
+
+
+def _header_similarity(a: str, b: str) -> float:
+    if not a.strip() or not b.strip():
+        return 0.0
+    score_orig = fuzz.token_sort_ratio(a, b) / 100.0
+    score_ascii = fuzz.token_sort_ratio(unidecode(a), unidecode(b)) / 100.0
+    return max(score_orig, score_ascii)
+
+
+def _clean_header(text: str) -> str:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return "\n".join(lines[:5]) if lines else text.strip()
+
+
+class BoundaryDetector:
+    """3-state page classifier — anti document-swallowing."""
+
+    def __init__(
+        self,
+        boundary_threshold: float = config.BOUNDARY_THRESHOLD,
+        low_confidence_range: tuple[float, float] = config.LOW_CONFIDENCE_RANGE,
+        high_threshold: float = getattr(config, "HIGH_BOUNDARY_THRESHOLD", 0.70),
+        continuation_validator: ContinuationValidator | None = None,
+        llm_referee: Any = None,
+    ) -> None:
+        self.boundary_threshold = boundary_threshold
+        self.low_confidence_range = low_confidence_range
+        self.high_threshold = high_threshold
+        self.validator = continuation_validator or ContinuationValidator()
+        self.llm_referee = llm_referee
+
+        self._prev_signal: PageSignal | None = None
+        self._prev_was_blank: bool = False
+        self._current_group: DocumentGroup | None = None
+        self._groups: list[DocumentGroup] = []
+        self._orphan_pages: list[int] = []
+        self._low_confidence_pages: list[dict] = []
+        self._group_counter: int = 0
+
+    def _compute_score(self, signal: PageSignal) -> tuple[float, str]:
+        score = 0.0
+        factors: list[str] = []
+
+        if signal.has_doc_keyword:
+            score += config.SCORE_HAS_KEYWORD
+            factors.append(
+                f"+catalog({signal.matched_doc_type or signal.matched_keyword})"
+            )
+
+        if signal.has_large_centered_text:
+            score += config.SCORE_HAS_LARGE_CENTERED
+            factors.append("+large_centered")
+
+        if self._prev_signal is not None:
+            dens_delta = abs(signal.text_density - self._prev_signal.text_density)
+            if dens_delta > 0.4:
+                score += config.SCORE_DENSITY_CHANGE
+                factors.append(f"+density_change({dens_delta:.2f})")
+
+        if self._prev_was_blank:
+            score += config.SCORE_AFTER_SEPARATOR
+            factors.append("+after_blank")
+
+        if signal.is_continuation:
+            score += config.SCORE_IS_CONTINUATION
+            factors.append("-continuation_pattern")
+
+        if self._prev_signal is not None:
+            sim = _header_similarity(signal.header_text, self._prev_signal.header_text)
+            if sim > config.HEADER_SIMILARITY_THRESHOLD:
+                score += config.SCORE_HEADER_SIMILAR
+                factors.append(f"-header_similar({sim:.2f})")
+
+        if signal.avg_confidence < 0.5:
+            score += config.SCORE_LOW_OCR_CONFIDENCE
+            factors.append("-low_ocr_conf")
+
+        score = float(min(1.0, max(0.0, score)))
+        reasoning = "; ".join(factors) if factors else "no_signals"
+        return score, reasoning
+
+    def _confidence_label(self, score: float) -> str:
+        lo, hi = self.low_confidence_range
+        if score >= 0.65 or score <= 0.20:
+            return "high"
+        if lo <= score <= hi:
+            return "low"
+        return "medium"
+
+    def _open_new_group(self, signal: PageSignal, score: float, reason: str) -> None:
+        if self._current_group is not None:
+            self._groups.append(self._current_group)
+            logger.info(
+                f"Closed document #{self._current_group.group_id} "
+                f"({len(self._current_group.page_numbers)} pages)"
+            )
+
+        doc_type = signal.matched_doc_type or "CHUA_XAC_DINH"
+        self._group_counter += 1
+        self._current_group = DocumentGroup(
+            group_id=self._group_counter,
+            raw_title=_clean_header(signal.header_text),
+            doc_type=doc_type,
+            doc_year=None,
+            page_numbers=[signal.page_num],
+        )
+        logger.info(
+            f"NEW_DOCUMENT #{self._group_counter} at page {signal.page_num} "
+            f"(score={score:.2f}, doc_type={doc_type!r}) | {reason}"
+        )
+
+    def _append_continuation(self, signal: PageSignal, reason: str) -> bool:
+        if self._current_group is None:
+            return False
+        self._current_group.page_numbers.append(signal.page_num)
+        logger.debug(
+            f"Page {signal.page_num}: CONFIRMED_CONTINUATION → "
+            f"group #{self._current_group.group_id} | {reason}"
+        )
+        return True
+
+    def _mark_orphan(self, signal: PageSignal, reason: str) -> None:
+        """
+        Cách ly trang mồ côi — KHÔNG đóng group đang mở.
+        Orphan không bị gộp; group vẫn mở để trang sau còn
+        CONFIRMED_CONTINUATION (tránh cắt ngang lý lịch nhiều trang).
+        """
+        self._orphan_pages.append(signal.page_num)
+        open_id = self._current_group.group_id if self._current_group else None
+        logger.warning(
+            f"Page {signal.page_num}: ORPHAN_PAGE (group #{open_id} vẫn mở) — {reason}"
+        )
+
+    def process_page(self, signal: PageSignal) -> BoundaryDecision:
+        # 1) Blank → SKIP (không orphan)
+        if signal.is_blank:
+            decision = BoundaryDecision(
+                page_num=signal.page_num,
+                page_class=PageClass.SEPARATOR,
+                score=0.0,
+                confidence="high",
+                reasoning="skip_blank",
+            )
+            self._prev_signal = signal
+            self._prev_was_blank = True
+            logger.debug(f"Page {signal.page_num}: SKIP_BLANK")
+            return decision
+
+        score, score_reason = self._compute_score(signal)
+        confidence = self._confidence_label(score)
+
+        # 2) NEW: catalog hit hoặc high heuristic score
+        is_new = bool(signal.matched_doc_type) or score >= self.high_threshold
+
+        # Form nhiều trang: tiêu đề catalog lặp lại trên trang tiếp → không NEW
+        if (
+            is_new
+            and self._current_group is not None
+            and signal.matched_doc_type
+            and signal.matched_doc_type == self._current_group.doc_type
+            and signal.matched_doc_type in MULTI_PAGE_FORM_TYPES
+        ):
+            curr_year = extract_year_robust(
+                signal.header_text + "\n" + (signal.full_text or "")[:300]
+            )
+            group_year = self._current_group.doc_year
+            # Năm khác rõ → bản mới cùng loại (vd. Phiếu bổ sung 2018 vs 2019)
+            if curr_year is not None and group_year is not None and curr_year != group_year:
+                is_new = True
+                score_reason += f"; +same_type_new_year({curr_year})"
+            else:
+                is_new = False
+                score_reason += "; -repeated_catalog_header_same_type"
+                if curr_year is not None and self._current_group.doc_year is None:
+                    self._current_group.doc_year = curr_year
+
+        # Trang đầu tiên không blank: nếu chưa match cũng mở group tạm
+        if self._current_group is None and not self._groups and not self._orphan_pages:
+            if is_new or signal.has_large_centered_text or score >= self.boundary_threshold:
+                is_new = True
+
+        if is_new:
+            self._open_new_group(signal, score, score_reason)
+            if self._current_group and self._current_group.doc_year is None:
+                y = extract_year_robust(
+                    signal.header_text + "\n" + (signal.full_text or "")[:300]
+                )
+                if y is not None:
+                    self._current_group.doc_year = y
+            page_class = PageClass.NEW_DOCUMENT
+            reasoning = f"new | {score_reason}"
+        elif "repeated_catalog_header_same_type" in score_reason:
+            # Tiêu đề form lặp lại trên trang tiếp của cùng loại → gộp chắc chắn
+            if self._append_continuation(signal, "repeated_catalog_header_same_type"):
+                page_class = PageClass.CONFIRMED_CONTINUATION
+                reasoning = f"confirmed_cont[same_type_header] | {score_reason}"
+            else:
+                self._mark_orphan(signal, "repeated_header_but_no_open_group")
+                page_class = PageClass.ORPHAN_PAGE
+                reasoning = "orphan | no_open_group"
+        else:
+            # Không NEW → chỉ gộp nếu ContinuationValidator xác nhận
+            open_doc_type = (
+                self._current_group.doc_type if self._current_group else None
+            )
+            verdict = self.validator.validate(
+                self._prev_signal,
+                signal,
+                self.llm_referee,
+                has_open_group=self._current_group is not None,
+                open_doc_type=open_doc_type,
+            )
+            if verdict.is_continuation:
+                if self._append_continuation(signal, verdict.reason):
+                    page_class = PageClass.CONFIRMED_CONTINUATION
+                    reasoning = f"confirmed_cont[{verdict.rule}] | {verdict.reason}"
+                else:
+                    self._mark_orphan(
+                        signal,
+                        f"continuation_claimed_but_no_open_group | {verdict.reason}",
+                    )
+                    page_class = PageClass.ORPHAN_PAGE
+                    reasoning = "orphan | no_open_group"
+            else:
+                self._mark_orphan(signal, verdict.reason)
+                page_class = PageClass.ORPHAN_PAGE
+                reasoning = f"orphan[{verdict.rule}] | {verdict.reason}"
+
+        decision = BoundaryDecision(
+            page_num=signal.page_num,
+            page_class=page_class,
+            score=score,
+            confidence=confidence,
+            reasoning=reasoning,
+        )
+
+        if confidence == "low":
+            self._low_confidence_pages.append(
+                {
+                    "page_num": signal.page_num,
+                    "score": score,
+                    "reasoning": reasoning,
+                    "header_preview": signal.header_text[:200],
+                    "matched_keyword": signal.matched_keyword,
+                    "matched_doc_type": signal.matched_doc_type,
+                    "page_class": page_class.value,
+                }
+            )
+
+        self._prev_signal = signal
+        self._prev_was_blank = False
+        return decision
+
+    def update_current_group_meta(
+        self, doc_type: str, doc_year: Optional[int]
+    ) -> None:
+        if self._current_group is not None:
+            self._current_group.doc_type = doc_type
+            if doc_year is not None:
+                self._current_group.doc_year = doc_year
+
+    def finalize(self) -> tuple[list[DocumentGroup], list[int]]:
+        """Đóng group cuối; trả (groups hợp lệ, orphan page numbers)."""
+        if self._current_group is not None:
+            self._groups.append(self._current_group)
+            logger.info(
+                f"Closed final document #{self._current_group.group_id} "
+                f"({len(self._current_group.page_numbers)} pages)"
+            )
+            self._current_group = None
+
+        logger.info(
+            f"Finalize: {len(self._groups)} documents, "
+            f"{len(self._orphan_pages)} orphan pages"
+        )
+        return list(self._groups), list(self._orphan_pages)
+
+    @property
+    def current_group(self) -> DocumentGroup | None:
+        return self._current_group
+
+    @property
+    def orphan_pages(self) -> list[int]:
+        return list(self._orphan_pages)
+
+    @property
+    def low_confidence_pages(self) -> list[dict]:
+        return list(self._low_confidence_pages)
