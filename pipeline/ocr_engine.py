@@ -40,11 +40,44 @@ class OCREngine:
         try:
             import os
 
-            # Windows + PaddlePaddle 3.x: oneDNN/mkldnn often crashes on predict
-            os.environ.setdefault("FLAGS_use_mkldnn", "0")
+            # Tắt OneDNN/MKLDNN TRƯỚC khi import paddle (tránh lỗi
+            # ConvertPirAttribute2RuntimeAttribute trên Linux CPU).
+            os.environ["FLAGS_use_mkldnn"] = "0"
+            os.environ["FLAGS_onednn"] = "0"
+            os.environ["FLAGS_use_mkldnn_bfloat16"] = "0"
             os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+            # Ép chạy CPU nếu GPU không sẵn sàng / user tắt GPU
+            if not use_gpu:
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
             from paddleocr import PaddleOCR
+
+            # Kiểm tra GPU thật sự dùng được
+            gpu_ok = False
+            if use_gpu:
+                try:
+                    import paddle
+
+                    gpu_ok = bool(paddle.device.is_compiled_with_cuda()) and (
+                        paddle.device.cuda.device_count() > 0
+                    )
+                except Exception:
+                    gpu_ok = False
+                if not gpu_ok:
+                    logger.warning(
+                        "OCR_USE_GPU=True nhưng CUDA không khả dụng — fallback CPU "
+                        "(FLAGS_use_mkldnn=0)"
+                    )
+                    use_gpu = False
+                    self.use_gpu = False
+                    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+            try:
+                import paddle
+
+                paddle.set_flags({"FLAGS_use_mkldnn": False})
+            except Exception:
+                pass
 
             device = "gpu:0" if use_gpu else "cpu"
 
@@ -93,7 +126,8 @@ class OCREngine:
                 self._api_version = 2
 
             logger.info(
-                f"PaddleOCR initialized (lang={lang}, device={device}, api=v{self._api_version})"
+                f"PaddleOCR initialized (lang={lang}, device={device}, "
+                f"api=v{self._api_version}, mkldnn=off)"
             )
         except Exception as exc:
             logger.error(f"Failed to initialize PaddleOCR: {exc}")
