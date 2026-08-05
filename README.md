@@ -1,43 +1,52 @@
-# Vietnamese PDF Auto-Splitter
+# Vietnamese PDF Auto-Splitter (Hồ sơ đảng viên — 3-state)
 
-Tự động phát hiện ranh giới giữa các văn bản hành chính tiếng Việt trong một file PDF scan lớn (~1.000 trang), rồi tách và xuất từng văn bản thành file PDF riêng — đặt tên theo tiêu đề trang đầu. Toàn bộ xử lý chạy **100% offline**, không gọi API ngoài.
+Tách PDF scan hồ sơ đảng viên hỗn hợp theo catalog Phụ lục 1361 (104 loại), chống nuốt tài liệu (NEW / CONFIRMED_CONTINUATION / ORPHAN), đặt tên theo Phụ lục 2.
 
-## Installation
+Repo: https://github.com/dinhdo1006/pdf-splitter
+
+## Installation (Linux / server GPU)
 
 ```bash
-cd pdf_splitter
-python -m venv .venv
+cd ~/Downloads   # hoặc thư mục bạn chọn
+git clone https://github.com/dinhdo1006/pdf-splitter.git
+cd pdf-splitter
 
-# Windows
-.venv\Scripts\activate
-
-# Linux / macOS
+sudo apt install -y python3-venv python3-full   # nếu chưa có
+python3 -m venv .venv
 source .venv/bin/activate
 
+pip install -U pip
 pip install -r requirements.txt
 ```
 
-> **GPU (tuỳ chọn):** thay `paddlepaddle` bằng `paddlepaddle-gpu` trong `requirements.txt`, rồi đặt `OCR_USE_GPU = True` trong `config.py`.
+Cập nhật code sau này:
 
-Lần chạy đầu tiên PaddleOCR sẽ tự tải model tiếng Việt về `~/.paddleocr/` (cần mạng một lần).
+```bash
+cd ~/path/to/pdf-splitter
+source .venv/bin/activate
+git pull origin main
+```
+
+> **GPU:** đặt `OCR_USE_GPU = True` trong `config.py`. Có thể cần cài `paddlepaddle-gpu` thay cho `paddlepaddle` CPU.
 
 ## First run
 
 ```bash
-# Test nhanh với 50 trang đầu
-python main.py --input path/to/large.pdf --output ./output --pages 50 --debug
+# Test nhanh
+python main.py -i path/to/hoso.pdf -o ./output --pages 10 --dpi 200
 
-# Chạy toàn bộ PDF
-python main.py --input path/to/large.pdf --output ./output --dpi 200
+# Full
+python main.py -i path/to/hoso.pdf -o ./output --dpi 200
 ```
 
 ## How it works
 
-Pipeline gồm 5 giai đoạn: (1) **Ingest** — stream từng trang PDF bằng PyMuPDF, không nạp cả file vào RAM; (2) **Preprocess** — deskew bằng Hough Line + CLAHE tăng tương phản; (3) **OCR** — PaddleOCR tiếng Việt, lấy text kèm toạ độ; (4) **Signal + Boundary** — trích tín hiệu (từ khoá tiêu đề, font lớn căn giữa, trang tiếp theo, mật độ chữ, trang trắng) rồi chấm điểm stateful để quyết định *new document / continuation / separator*; (5) **Export** — copy nguyên trang PDF gốc (không render lại) ra từng file, chuẩn hoá tên bằng slug ASCII.
+Pipeline: Ingest → Preprocess → OCR → catalog matcher + **3-state boundary** (NEW / CONFIRMED_CONTINUATION / ORPHAN) → YearAwareSequencer → export `STT.Ten[.N].pdf` + `_review/orphans/`.
 
 ## Configuration
 
 Các hằng số nằm trong `config.py`:
+
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
