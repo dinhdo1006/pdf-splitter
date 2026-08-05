@@ -56,6 +56,8 @@ class PageSignal:
     matched_doc_type: str = ""
     match_score: float = 0.0
     all_blocks: list = field(default_factory=list)
+    is_toc: bool = False
+    is_form_section: bool = False
 
 
 def _empty_signal(page_num: int) -> PageSignal:
@@ -74,6 +76,8 @@ def _empty_signal(page_num: int) -> PageSignal:
         matched_doc_type="",
         match_score=0.0,
         all_blocks=[],
+        is_toc=False,
+        is_form_section=False,
     )
 
 
@@ -88,16 +92,20 @@ class SignalExtractor:
         self.ocr = ocr_engine
         self.matcher = matcher or get_matcher()
 
-    def _match_catalog(self, header_text: str) -> tuple[bool, str, str, float]:
+    def _match_catalog(
+        self, header_text: str, full_text: str = ""
+    ) -> tuple[bool, str, str, float, bool, bool]:
         """
         Returns:
-            (has_hit, display_phrase, doc_type_key, score)
+            (has_hit, display_phrase, doc_type_key, score, is_toc, is_form_section)
         """
-        result = self.matcher.match(header_text)
+        result = self.matcher.match(header_text, full_text)
+        is_toc = result.source == "toc"
+        is_form = result.source == "form_section"
         min_score = getattr(config, "CATALOG_MATCH_MIN_SCORE", 82)
         if result.doc_type_key and result.score >= min_score:
-            return True, result.matched_phrase, result.doc_type_key, result.score
-        return False, "", "", 0.0
+            return True, result.matched_phrase, result.doc_type_key, result.score, False, False
+        return False, result.matched_phrase, "", 0.0, is_toc, is_form
 
     def _has_large_centered_text(
         self,
@@ -188,7 +196,9 @@ class SignalExtractor:
                 if hw_all:
                     full_text = (full_text + "\n" + hw_all).strip()
 
-            has_kw, matched_kw, doc_type, match_score = self._match_catalog(header_text)
+            has_kw, matched_kw, doc_type, match_score, is_toc, is_form = (
+                self._match_catalog(header_text, full_text)
+            )
             has_large_centered = self._has_large_centered_text(
                 header_blocks, image_height, image_width
             )
@@ -218,6 +228,8 @@ class SignalExtractor:
                 matched_doc_type=doc_type,
                 match_score=match_score,
                 all_blocks=list(all_blocks),
+                is_toc=is_toc,
+                is_form_section=is_form,
             )
 
         except Exception as exc:

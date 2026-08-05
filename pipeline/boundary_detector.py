@@ -204,6 +204,45 @@ class BoundaryDetector:
         score, score_reason = self._compute_score(signal)
         confidence = self._confidence_label(score)
 
+        open_doc = (
+            (self._current_group.doc_type or "").upper()
+            if self._current_group
+            else ""
+        )
+        is_ly_lich_open = open_doc in {
+            "LY_LICH_DANG_VIEN",
+            "LY_LICH_NGUOI_XIN_VAO_DANG",
+        }
+
+        # TOC / mục form lý lịch: không bao giờ NEW từ catalog/heuristic
+        if getattr(signal, "is_toc", False) or getattr(signal, "is_form_section", False):
+            kind = "toc" if getattr(signal, "is_toc", False) else "form_section"
+            if is_ly_lich_open and self._append_continuation(
+                signal, f"{kind}_inside_ly_lich"
+            ):
+                decision = BoundaryDecision(
+                    page_num=signal.page_num,
+                    page_class=PageClass.CONFIRMED_CONTINUATION,
+                    score=score,
+                    confidence=confidence,
+                    reasoning=f"confirmed_cont[{kind}_ly_lich] | {score_reason}",
+                )
+                self._prev_signal = signal
+                self._prev_was_blank = False
+                return decision
+            # Không có lý lịch đang mở → orphan (không mở NEW từ mục lục)
+            self._mark_orphan(signal, f"{kind}_not_catalog_document")
+            decision = BoundaryDecision(
+                page_num=signal.page_num,
+                page_class=PageClass.ORPHAN_PAGE,
+                score=score,
+                confidence=confidence,
+                reasoning=f"orphan[{kind}] | {score_reason}",
+            )
+            self._prev_signal = signal
+            self._prev_was_blank = False
+            return decision
+
         # 2) NEW: catalog hit hoặc high heuristic score
         is_new = bool(signal.matched_doc_type) or score >= self.high_threshold
 

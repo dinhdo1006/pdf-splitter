@@ -3,13 +3,15 @@ pipeline/party_doc_matcher.py
 =============================
 Khớp header OCR với PARTY_DOC_CATALOG (104 loại) — Phụ lục 1.
 
-Ưu tiên:
-  1. Alias cố định (mã mẫu, biến thể tiêu đề thực tế)
-  2. Tên tài liệu trong catalog (substring / fuzzy)
+Chặn false-positive:
+  • Trang MỤC LỤC (liệt kê tên tài liệu) → không NEW catalog
+  • Mục số trong form lý lịch (22), 23) ĐÀO TẠO…) → không NEW
+  • Alias quá ngắn (van bang, chung chi) đã bỏ
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from loguru import logger
@@ -31,22 +33,55 @@ _NOISE_PHRASES = (
     "chi bo",
 )
 
+# Trang mục lục / bìa mục lục — không map sang 104 loại
+_TOC_MARKERS = (
+    "muc luc tai lieu trong ho so dang vien",
+    "muc luc tai lieu trong ho so",
+    "tai lieu trong ho so dang vien",
+    "ly do khong co tai lieu",
+    "co hoac khong",
+    "ten tai lieu",
+)
+
+_TOC_TITLE = (
+    "muc luc",
+)
+
+# Mục đánh số trong form lý lịch (không phải tài liệu mới)
+_FORM_SECTION_RE = re.compile(
+    r"(?:^|\s)(\d{1,2})\)\s*[A-Z]",
+)
+_FORM_SECTION_HINTS = (
+    "tom tat qua trinh hoat dong",
+    "dao tao boi duong",
+    "chuyen mon nghiep vu",
+    "dac diem lich su ban than",
+    "quan he voi nuoc ngoai",
+    "hoan canh gia dinh",
+    "cam doan ki ten",
+    "cam doan ky ten",
+    "chung nhan cua cap uy",
+    "nhung diem can chu y",
+)
+
 # Alias OCR / tiêu đề thực tế → doc_type_key (ưu tiên cao, dài hơn match trước)
+# KHÔNG dùng alias ngắn dễ dính mục lục / mục form: "van bang", "chung chi"
 _ALIASES: list[tuple[str, str]] = [
     ("so yeu ly lich dang vien", "LY_LICH_DANG_VIEN"),
     ("so yeu ly lich", "LY_LICH_DANG_VIEN"),
+    ("so luoc ly lich", "LY_LICH_DANG_VIEN"),
     ("ly lich cua nguoi xin vao dang", "LY_LICH_NGUOI_XIN_VAO_DANG"),
     ("ly lich nguoi xin vao dang", "LY_LICH_NGUOI_XIN_VAO_DANG"),
     ("ly lich dang vien", "LY_LICH_DANG_VIEN"),
     ("phieu bo sung ho so dang vien", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
-    ("phieu bo sung", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
+    ("phieu bo sung ho so", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
     ("mau 3-hsdv", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
     ("mau 3 hsdv", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
     ("phieu dang vien cu", "PHIEU_DANG_VIEN_CU_LUU_LICH_SU"),
     ("phieu dang vien", "PHIEU_DANG_VIEN"),
     ("ban kiem diem dang vien", "BAN_TU_KIEM_DIEM_HANG_NAM"),
-    ("ban tu kiem diem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("ban tu kiem diem hang nam", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("ban tu kiem diem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("giay gioi thieu sinh hoat dang tam thoi", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_TAM_THOI"),
     ("giay gioi thieu sinh hoat dang chinh thuc", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_CHINH_THUC"),
     ("giay gioi thieu sinh hoat dang noi bo", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_NOI_BO"),
@@ -56,9 +91,8 @@ _ALIASES: list[tuple[str, str]] = [
     ("quyet dinh cong nhan dang vien chinh thuc", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
     ("quyet dinh cong nhan dang vien", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
     ("don xin vao dang", "DON_XIN_VAO_DANG"),
+    ("bang tot nghiep dai hoc", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
     ("bang tot nghiep", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
-    ("chung chi", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
-    ("van bang", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
 ]
 
 
@@ -67,7 +101,7 @@ class MatchResult:
     doc_type_key: str
     score: float  # 0–100
     matched_phrase: str
-    source: str  # "alias" | "catalog" | "none"
+    source: str  # "alias" | "catalog" | "none" | "toc" | "form_section"
 
 
 def _collapse(text: str) -> str:
@@ -76,14 +110,67 @@ def _collapse(text: str) -> str:
 
 
 def _is_noise_only(header_ascii: str) -> bool:
-    """True nếu header gần như chỉ chứa cụm hành chính chung."""
     h = header_ascii.lower()
-    # Nếu có cụm catalog dài hơn noise thì không coi là noise-only
     substantive = h
     for n in _NOISE_PHRASES:
         substantive = substantive.replace(n, " ")
     substantive = " ".join(substantive.split())
     return len(substantive) < 8
+
+
+def is_table_of_contents(header_text: str, full_text: str = "") -> bool:
+    """True nếu trang là mục lục hồ sơ (không phải thành phần tài liệu 104)."""
+    blob = _collapse(header_text + "\n" + (full_text or "")[:800]).lower()
+    if not blob:
+        return False
+    # Tiêu đề mục lục rõ
+    if "muc luc" in blob and (
+        "tai lieu" in blob
+        or "ho so dang" in blob
+        or "ho so" in blob
+        or "ly do khong co" in blob
+        or "co khong" in blob
+    ):
+        return True
+    hits = sum(1 for m in _TOC_MARKERS if m in blob)
+    if hits >= 2:
+        return True
+    # Bìa "MỤC LỤC" lớn + họ tên
+    if blob.strip().startswith("muc luc") or "\nmuc luc\n" in f"\n{blob}\n":
+        if "ho ten" in blob or "pham" in blob or "dang vien" in blob:
+            return True
+    return False
+
+
+def is_ly_lich_form_section(header_text: str, full_text: str = "") -> bool:
+    """
+    True nếu đây là mục đánh số bên trong form lý lịch
+    (vd. 22) Tóm tắt quá trình…, 23) Đào tạo bồi dưỡng…).
+    """
+    blob = _collapse(header_text + "\n" + (full_text or "")[:500])
+    if not blob:
+        return False
+    # "23) DAO TAO" ở đầu header
+    head = blob[:120]
+    if _FORM_SECTION_RE.search(head):
+        return True
+    low = blob.lower()
+    if any(h in low for h in _FORM_SECTION_HINTS):
+        # Có hint mục form + số mục
+        if re.search(r"\b\d{1,2}\)", head) or re.search(r"\b\d{1,2}\)", blob[:80]):
+            return True
+        # Hướng dẫn cam đoan / hoàn cảnh (trang phụ lục hướng dẫn trong LL)
+        if any(
+            h in low
+            for h in (
+                "cam doan",
+                "hoan canh gia dinh",
+                "chung nhan cua cap uy",
+                "ban to chuc trung uong",
+            )
+        ):
+            return True
+    return False
 
 
 class PartyDocMatcher:
@@ -96,11 +183,10 @@ class PartyDocMatcher:
         ),
     ) -> None:
         self.fuzzy_threshold = fuzzy_threshold
-        # (phrase_ascii_upper, key) dài hơn trước
         self._catalog_phrases: list[tuple[str, str]] = []
         for key, (_stt, ten, _prio) in PARTY_DOC_CATALOG.items():
             phrase = _collapse(ten)
-            if phrase:
+            if phrase and len(phrase) >= 12:
                 self._catalog_phrases.append((phrase, key))
         self._catalog_phrases.sort(key=lambda x: len(x[0]), reverse=True)
 
@@ -114,37 +200,60 @@ class PartyDocMatcher:
             f"{len(self._catalog_phrases)} catalog phrases"
         )
 
-    def match(self, header_text: str) -> MatchResult:
+    def match(
+        self,
+        header_text: str,
+        full_text: str = "",
+    ) -> MatchResult:
         header = _collapse(header_text)
         if not header or _is_noise_only(header):
             return MatchResult("", 0.0, "", "none")
 
-        # 1) Alias exact / substring
-        for phrase, key in self._aliases:
-            if phrase and phrase in header:
-                return MatchResult(key, 100.0, phrase, "alias")
-            score = fuzz.partial_ratio(phrase, header)
-            if score >= max(self.fuzzy_threshold, 88):
-                return MatchResult(key, float(score), phrase, "alias")
+        # Chặn mục lục / mục form TRƯỚC khi fuzzy catalog
+        if is_table_of_contents(header_text, full_text):
+            logger.debug("[matcher] TOC detected — skip catalog match")
+            return MatchResult("", 0.0, "MUC_LUC", "toc")
 
-        # 2) Catalog names
-        best: MatchResult | None = None
-        for phrase, key in self._catalog_phrases:
-            if len(phrase) < 10:
-                # Tránh match quá ngắn gây nhiễu
+        if is_ly_lich_form_section(header_text, full_text):
+            logger.debug("[matcher] form section detected — skip catalog match")
+            return MatchResult("", 0.0, "FORM_SECTION", "form_section")
+
+        # 1) Alias (chỉ substring đủ dài; fuzzy cao hơn)
+        for phrase, key in self._aliases:
+            if not phrase or len(phrase) < 10:
                 continue
             if phrase in header:
+                return MatchResult(key, 100.0, phrase, "alias")
+            score = fuzz.partial_ratio(phrase, header)
+            if score >= max(self.fuzzy_threshold, 90):
+                return MatchResult(key, float(score), phrase, "alias")
+
+        # 2) Catalog — yêu cầu phrase dài + match mạnh trên HEADER (không full page)
+        # Header quá ngắn (vd. dòng mục lục "Văn bằng…") dễ false-positive partial_ratio
+        if len(header) < 18:
+            return MatchResult("", 0.0, "", "none")
+
+        best: MatchResult | None = None
+        for phrase, key in self._catalog_phrases:
+            if len(phrase) < 14:
+                continue
+            # Phrase dài hơn header nhiều → chỉ chấp nhận nếu header chứa cụm lõi
+            if len(phrase) > len(header) + 8 and phrase[: max(18, len(header))] not in header:
+                # Cho phép substring ngược: header nằm trong phrase chỉ khi header đủ dài
+                if len(header) < 28:
+                    continue
+            if phrase in header:
                 cand = MatchResult(key, 100.0, phrase, "catalog")
-                if best is None or cand.score > best.score or (
-                    cand.score == best.score and len(phrase) > len(best.matched_phrase)
-                ):
+                if best is None or len(phrase) > len(best.matched_phrase):
                     best = cand
                 continue
             score = float(fuzz.partial_ratio(phrase, header))
-            if score >= self.fuzzy_threshold:
+            # Siết: partial cao nhưng header ngắn hơn phrase rõ → bỏ
+            if score >= max(self.fuzzy_threshold, 88) and len(header) >= max(22, int(len(phrase) * 0.45)):
                 cand = MatchResult(key, score, phrase, "catalog")
                 if best is None or cand.score > best.score or (
-                    cand.score == best.score and len(phrase) > len(best.matched_phrase)
+                    cand.score == best.score
+                    and len(phrase) > len(best.matched_phrase)
                 ):
                     best = cand
 
@@ -152,11 +261,11 @@ class PartyDocMatcher:
             return best
         return MatchResult("", 0.0, "", "none")
 
-    def has_catalog_hit(self, header_text: str) -> bool:
-        return bool(self.match(header_text).doc_type_key)
+    def has_catalog_hit(self, header_text: str, full_text: str = "") -> bool:
+        r = self.match(header_text, full_text)
+        return bool(r.doc_type_key)
 
 
-# Singleton tiện dụng
 _default_matcher: PartyDocMatcher | None = None
 
 

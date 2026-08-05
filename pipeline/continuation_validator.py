@@ -125,6 +125,11 @@ class ContinuationValidator:
                 False, "none", "curr_has_catalog_hit", 0.0
             )
 
+        # Soft: mục lục / mục form / hướng dẫn LL khi đang mở lý lịch
+        soft = self._soft_ly_lich_absorb(curr, has_open_group, open_doc_type)
+        if soft.is_continuation:
+            return soft
+
         r1 = self._rule1_syntactic(prev, curr)
         if r1.is_continuation:
             logger.debug(
@@ -160,6 +165,49 @@ class ContinuationValidator:
             f"no_rule_matched (r1={r1.reason}; r2={r2.reason})",
             0.0,
         )
+
+    def _soft_ly_lich_absorb(
+        self,
+        curr: PageSignal,
+        has_open_group: bool,
+        open_doc_type: Optional[str],
+    ) -> ContinuationVerdict:
+        """Gộp mục lục / mục số / hướng dẫn khi đang mở form lý lịch."""
+        doc_key = (open_doc_type or "").upper()
+        if not has_open_group or doc_key not in {
+            "LY_LICH_DANG_VIEN",
+            "LY_LICH_NGUOI_XIN_VAO_DANG",
+        }:
+            return ContinuationVerdict(False, "soft", "not_ly_lich_open", 0.0)
+
+        if getattr(curr, "is_toc", False):
+            return ContinuationVerdict(
+                True, "soft", "toc_inside_open_ly_lich", 0.88
+            )
+        if getattr(curr, "is_form_section", False):
+            return ContinuationVerdict(
+                True, "soft", "form_section_inside_open_ly_lich", 0.90
+            )
+
+        blob = unidecode(
+            (curr.header_text or "") + "\n" + (curr.full_text or "")[:600]
+        ).lower()
+        absorb_hints = (
+            "so luoc ly lich",
+            "huong dan",
+            "nhung diem can chu y",
+            "cam doan",
+            "hoan canh gia dinh",
+            "chung nhan cua cap uy",
+            "tom tat qua trinh",
+            "dao tao boi duong",
+            "dac diem lich su",
+        )
+        if any(h in blob for h in absorb_hints):
+            return ContinuationVerdict(
+                True, "soft", "ly_lich_section_or_guide_hint", 0.80
+            )
+        return ContinuationVerdict(False, "soft", "no_soft_hint", 0.0)
 
     # ── Rule 1 ───────────────────────────────────────────────────────────────
 
