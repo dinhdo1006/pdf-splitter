@@ -7,6 +7,7 @@ Chặn false-positive:
   • Trang MỤC LỤC (liệt kê tên tài liệu) → không NEW catalog
   • Mục số trong form lý lịch (22), 23) ĐÀO TẠO…) → không NEW
   • Alias quá ngắn (van bang, chung chi) đã bỏ
+  • OCR méo "MC LC" / "TAI LIU" vẫn nhận là mục lục
 """
 
 from __future__ import annotations
@@ -39,12 +40,9 @@ _TOC_MARKERS = (
     "muc luc tai lieu trong ho so",
     "tai lieu trong ho so dang vien",
     "ly do khong co tai lieu",
+    "ly do khong co",
     "co hoac khong",
     "ten tai lieu",
-)
-
-_TOC_TITLE = (
-    "muc luc",
 )
 
 # Mục đánh số trong form lý lịch (không phải tài liệu mới)
@@ -118,27 +116,73 @@ def _is_noise_only(header_ascii: str) -> bool:
     return len(substantive) < 8
 
 
+def _ocr_normalize_toc_blob(text: str) -> str:
+    """Sửa méo OCR thường gặp trên trang mục lục (MC LC, TAI LIU…)."""
+    b = _collapse(text or "").lower()
+    # MỤC LỤC → MC LC / MUC LC / M C L C
+    b = re.sub(r"\bm\s*c\s*l\s*c\b", "muc luc", b)
+    b = re.sub(r"\bmuc\s*l\s*c\b", "muc luc", b)
+    b = re.sub(r"\bmc\s*luc\b", "muc luc", b)
+    b = re.sub(r"\bm\s*uc\s*luc\b", "muc luc", b)
+    # TÀI LIỆU → TAI LIU
+    b = re.sub(r"\btai\s*liu\b", "tai lieu", b)
+    # ĐẢNG / ĐNG
+    b = re.sub(r"\bdng\b", "dang", b)
+    b = re.sub(r"\bho\s*so\s*dng\b", "ho so dang", b)
+    return b
+
+
 def is_table_of_contents(header_text: str, full_text: str = "") -> bool:
     """True nếu trang là mục lục hồ sơ (không phải thành phần tài liệu 104)."""
-    blob = _collapse(header_text + "\n" + (full_text or "")[:800]).lower()
+    blob = _ocr_normalize_toc_blob(
+        (header_text or "") + "\n" + (full_text or "")[:1200]
+    )
     if not blob:
         return False
-    # Tiêu đề mục lục rõ
+
+    # Cột đặc trưng form mục lục HSĐV (kể cả khi OCR méo tiêu đề)
+    if "ly do khong co" in blob:
+        return True
+    if "ten tai lieu" in blob and ("co" in blob or "khong" in blob):
+        return True
+
+    # Tiêu đề mục lục (sau normalize OCR)
     if "muc luc" in blob and (
         "tai lieu" in blob
         or "ho so dang" in blob
         or "ho so" in blob
-        or "ly do khong co" in blob
+        or "dang vien" in blob
         or "co khong" in blob
     ):
         return True
+
     hits = sum(1 for m in _TOC_MARKERS if m in blob)
     if hits >= 2:
         return True
-    # Bìa "MỤC LỤC" lớn + họ tên
-    if blob.strip().startswith("muc luc") or "\nmuc luc\n" in f"\n{blob}\n":
-        if "ho ten" in blob or "pham" in blob or "dang vien" in blob:
+
+    # Bìa "MỤC LỤC" lớn
+    if blob.strip().startswith("muc luc") or " muc luc " in f" {blob} ":
+        if any(x in blob for x in ("ho ten", "dang vien", "tai lieu", "ho so")):
             return True
+    return False
+
+
+def looks_like_toc_listing(
+    full_text: str, alias_phrases: list[tuple[str, str]]
+) -> bool:
+    """Nhiều tên tài liệu catalog cùng trang → gần chắc là mục lục liệt kê."""
+    blob = _ocr_normalize_toc_blob(full_text or "")
+    if len(blob) < 40:
+        return False
+    keys: set[str] = set()
+    for phrase, key in alias_phrases:
+        p = phrase.lower()
+        if len(p) < 14:
+            continue
+        if p in blob:
+            keys.add(key)
+            if len(keys) >= 3:
+                return True
     return False
 
 
@@ -150,16 +194,13 @@ def is_ly_lich_form_section(header_text: str, full_text: str = "") -> bool:
     blob = _collapse(header_text + "\n" + (full_text or "")[:500])
     if not blob:
         return False
-    # "23) DAO TAO" ở đầu header
     head = blob[:120]
     if _FORM_SECTION_RE.search(head):
         return True
     low = blob.lower()
     if any(h in low for h in _FORM_SECTION_HINTS):
-        # Có hint mục form + số mục
         if re.search(r"\b\d{1,2}\)", head) or re.search(r"\b\d{1,2}\)", blob[:80]):
             return True
-        # Hướng dẫn cam đoan / hoàn cảnh (trang phụ lục hướng dẫn trong LL)
         if any(
             h in low
             for h in (
@@ -214,6 +255,10 @@ class PartyDocMatcher:
             logger.debug("[matcher] TOC detected — skip catalog match")
             return MatchResult("", 0.0, "MUC_LUC", "toc")
 
+        if looks_like_toc_listing(full_text or header_text, self._aliases):
+            logger.debug("[matcher] TOC listing (multi titles) — skip catalog")
+            return MatchResult("", 0.0, "MUC_LUC", "toc")
+
         if is_ly_lich_form_section(header_text, full_text):
             logger.debug("[matcher] form section detected — skip catalog match")
             return MatchResult("", 0.0, "FORM_SECTION", "form_section")
@@ -229,7 +274,6 @@ class PartyDocMatcher:
                 return MatchResult(key, float(score), phrase, "alias")
 
         # 2) Catalog — yêu cầu phrase dài + match mạnh trên HEADER (không full page)
-        # Header quá ngắn (vd. dòng mục lục "Văn bằng…") dễ false-positive partial_ratio
         if len(header) < 18:
             return MatchResult("", 0.0, "", "none")
 
@@ -237,9 +281,7 @@ class PartyDocMatcher:
         for phrase, key in self._catalog_phrases:
             if len(phrase) < 14:
                 continue
-            # Phrase dài hơn header nhiều → chỉ chấp nhận nếu header chứa cụm lõi
             if len(phrase) > len(header) + 8 and phrase[: max(18, len(header))] not in header:
-                # Cho phép substring ngược: header nằm trong phrase chỉ khi header đủ dài
                 if len(header) < 28:
                     continue
             if phrase in header:
@@ -248,8 +290,9 @@ class PartyDocMatcher:
                     best = cand
                 continue
             score = float(fuzz.partial_ratio(phrase, header))
-            # Siết: partial cao nhưng header ngắn hơn phrase rõ → bỏ
-            if score >= max(self.fuzzy_threshold, 88) and len(header) >= max(22, int(len(phrase) * 0.45)):
+            if score >= max(self.fuzzy_threshold, 88) and len(header) >= max(
+                22, int(len(phrase) * 0.45)
+            ):
                 cand = MatchResult(key, score, phrase, "catalog")
                 if best is None or cand.score > best.score or (
                     cand.score == best.score
