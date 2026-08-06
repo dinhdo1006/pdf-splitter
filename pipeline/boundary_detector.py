@@ -24,7 +24,9 @@ import config
 from pipeline.continuation_validator import ContinuationValidator, MULTI_PAGE_FORM_TYPES
 from pipeline.doc_identity import (
     extract_decision_ref,
+    is_quyet_dinh_type,
     looks_like_phieu_bo_sung,
+    looks_like_standalone_minutes,
     should_force_new_document,
 )
 from pipeline.signal_extractor import PageSignal
@@ -260,15 +262,19 @@ class BoundaryDetector:
 
     def _mark_orphan(self, signal: PageSignal, reason: str) -> None:
         """
-        Cách ly trang mồ côi — KHÔNG đóng group đang mở.
-        Orphan không bị gộp; group vẫn mở để trang sau còn
-        CONFIRMED_CONTINUATION (tránh cắt ngang lý lịch nhiều trang).
+        Cách ly trang mồ côi.
+        Lý lịch nhiều trang: giữ group mở để trang sau còn continuation.
+        Quyết định: đóng group ngay — tránh trang biên bản sau bị soft-cont vào QĐ.
         """
         self._orphan_pages.append(signal.page_num)
         open_id = self._current_group.group_id if self._current_group else None
         logger.warning(
             f"Page {signal.page_num}: ORPHAN_PAGE (group #{open_id} vẫn mở) — {reason}"
         )
+        if self._current_group is not None and is_quyet_dinh_type(
+            self._current_group.doc_type
+        ):
+            self._close_current_group("orphan_closes_quyet_dinh")
 
     def _close_current_group(self, reason: str) -> None:
         """Đóng group đang mở (giữ orphan list / không tạo orphan)."""
@@ -356,7 +362,9 @@ class BoundaryDetector:
         if getattr(signal, "is_appendix", False) and self._current_group is not None:
             kind = getattr(signal, "appendix_kind", "") or ""
             if kind == "PHU_LUC_NGHI_QUYET" and not open_doc.startswith("BAN_TU_KIEM"):
-                # Biên bản / nghị quyết độc lập → orphan, không nuốt vào lý lịch
+                # Biên bản / nghị quyết độc lập → orphan; đóng QĐ nếu đang mở
+                if is_quyet_dinh_type(open_doc):
+                    self._close_current_group("appendix_minutes_closes_quyet_dinh")
                 self._mark_orphan(signal, f"appendix_standalone[{kind}]")
                 decision = BoundaryDecision(
                     page_num=signal.page_num,
@@ -382,6 +390,26 @@ class BoundaryDetector:
                     self._prev_signal = signal
                     self._prev_was_blank = False
                     return decision
+
+        # Đang mở QĐ + trang hiện tại giống biên bản → orphan (không soft-cont)
+        if (
+            self._current_group is not None
+            and is_quyet_dinh_type(open_doc)
+            and looks_like_standalone_minutes(signal.header_text, signal.full_text or "")
+            and not (signal.matched_doc_type or "").upper().startswith("QUYET_DINH")
+        ):
+            self._close_current_group("minutes_after_quyet_dinh")
+            self._mark_orphan(signal, "minutes_after_quyet_dinh")
+            decision = BoundaryDecision(
+                page_num=signal.page_num,
+                page_class=PageClass.ORPHAN_PAGE,
+                score=score,
+                confidence=confidence,
+                reasoning=f"orphan[minutes_after_qd] | {score_reason}",
+            )
+            self._prev_signal = signal
+            self._prev_was_blank = False
+            return decision
 
         # TOC: LUÔN orphan — không bao giờ gộp vào lý lịch / soft size
         if getattr(signal, "is_toc", False):

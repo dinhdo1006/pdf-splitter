@@ -127,6 +127,13 @@ class ContinuationValidator:
                 False, "none", "curr_has_catalog_hit", 0.0
             )
 
+        # Quyết định gần như luôn 1 trang — không soft-continue (tránh nuốt biên bản)
+        open_key = (open_doc_type or "").upper()
+        if has_open_group and open_key.startswith("QUYET_DINH"):
+            return ContinuationVerdict(
+                False, "none", "quyet_dinh_no_soft_continuation", 0.0
+            )
+
         # Soft: mục lục / mục form / hướng dẫn LL khi đang mở lý lịch
         soft = self._soft_ly_lich_absorb(curr, has_open_group, open_doc_type)
         if soft.is_continuation:

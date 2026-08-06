@@ -16,6 +16,7 @@ from loguru import logger
 import config
 from pipeline.boundary_detector import DocumentGroup
 from pipeline.continuation_validator import MULTI_PAGE_FORM_TYPES
+from pipeline.doc_identity import is_quyet_dinh_type, looks_like_standalone_minutes
 from pipeline.signal_extractor import PageSignal
 
 _STRONG_SIZE = getattr(
@@ -28,20 +29,9 @@ _STRONG_SIZE = getattr(
 def _looks_like_standalone_minutes(signal: Optional[PageSignal]) -> bool:
     if signal is None:
         return False
-    blob = (
-        ((getattr(signal, "header_text", "") or "") + "\n")
-        + ((getattr(signal, "full_text", "") or "")[:800])
-    ).lower()
-    return any(
-        hint in blob
-        for hint in (
-            "bien ban",
-            "trich bien ban",
-            "hop chi bo",
-            "hop chi doan",
-            "chi doan",
-            "xet chuyen dang chinh thuc",
-        )
+    return looks_like_standalone_minutes(
+        getattr(signal, "header_text", "") or "",
+        getattr(signal, "full_text", "") or "",
     )
 
 
@@ -158,16 +148,21 @@ def _judge_orphan(
         and next_group is not None
         and prev_group.group_id == next_group.group_id
     ):
-        # Không sandwich tài liệu biên bản/phụ lục vào giữa chuỗi Quyết định.
-        if (
-            (prev_group.doc_type or "").upper().startswith("QUYET_DINH")
-            and _looks_like_standalone_minutes(signal)
-        ):
+        # Quyết định gần như luôn 1 trang — không sandwich lấp lỗ (hay nuốt biên bản).
+        if is_quyet_dinh_type(prev_group.doc_type):
             return ReattachDecision(
                 orphan_page_num=orphan_pn,
                 action="keep_orphan",
                 target_group_id=None,
-                reason="minutes_between_quyet_dinh_keep_orphan",
+                reason="no_sandwich_into_quyet_dinh",
+                confidence=1.0,
+            )
+        if _looks_like_standalone_minutes(signal):
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="minutes_sandwich_keep_orphan",
                 confidence=1.0,
             )
         return ReattachDecision(
@@ -182,6 +177,7 @@ def _judge_orphan(
     if (
         prev_group is not None
         and (prev_group.doc_type or "").upper() in MULTI_PAGE_FORM_TYPES
+        and not is_quyet_dinh_type(prev_group.doc_type)
         and signal is not None
         and not signal.matched_doc_type
         and not getattr(signal, "is_toc", False)
@@ -197,6 +193,14 @@ def _judge_orphan(
                 action="keep_orphan",
                 target_group_id=None,
                 reason="looks_like_phieu_bo_sung_keep_for_new_doc",
+                confidence=1.0,
+            )
+        if _looks_like_standalone_minutes(signal):
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="minutes_trailing_keep_orphan",
                 confidence=1.0,
             )
         return ReattachDecision(
@@ -248,6 +252,8 @@ def _judge_orphan(
         and prev_group.page_size_group == signal.page_size_group
         and not signal.matched_doc_type
         and not getattr(signal, "is_toc", False)
+        and not is_quyet_dinh_type(prev_group.doc_type)
+        and not _looks_like_standalone_minutes(signal)
     ):
         return ReattachDecision(
             orphan_page_num=orphan_pn,

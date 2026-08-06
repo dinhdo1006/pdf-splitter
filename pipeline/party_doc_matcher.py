@@ -168,7 +168,10 @@ _SIZE_GATED_ALIASES: list[tuple[str, str, frozenset[str]]] = [
 _APPENDIX_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"mau\s*2a.*kd.*dg", re.I), "PHU_LUC_TU_KIEM_DIEM"),
     (re.compile(r"danh\s*gia.*phan\s*loai", re.I), "PHU_LUC_TU_KIEM_DIEM"),
+    (re.compile(r"trich\s*bien\s*ban", re.I), "PHU_LUC_NGHI_QUYET"),
     (re.compile(r"bien\s*ban.*chi\s*bo", re.I), "PHU_LUC_NGHI_QUYET"),
+    (re.compile(r"bien\s*ban.*chi\s*doan", re.I), "PHU_LUC_NGHI_QUYET"),
+    (re.compile(r"hop\s*chi\s*bo.*xet\s*chuyen", re.I), "PHU_LUC_NGHI_QUYET"),
     (re.compile(r"bien\s*ban\s*hop", re.I), "PHU_LUC_NGHI_QUYET"),
     (re.compile(r"bien\s*ban\s*so", re.I), "PHU_LUC_NGHI_QUYET"),
     (re.compile(r"^bien\s*ban\b", re.I), "PHU_LUC_NGHI_QUYET"),
@@ -372,9 +375,13 @@ class PartyDocMatcher:
             (header_text or "") + "\n" + (full_text or "")[:400]
         ).lower()
 
-        # Biên bản chi bộ ≠ bản tự kiểm điểm
-        if "bien ban" in blob_low and "tu kiem diem" not in blob_low:
-            if "chi bo" in blob_low or blob_low.strip().startswith("bien ban"):
+        # Biên bản / trích biên bản ≠ bản tự kiểm điểm / quyết định
+        if "tu kiem diem" not in blob_low:
+            if (
+                "bien ban" in blob_low
+                or "trich bien" in blob_low
+                or ("hop chi bo" in blob_low and "xet" in blob_low)
+            ):
                 logger.debug("[matcher] bien ban → appendix (not kiem diem)")
                 return MatchResult("", 0.0, "PHU_LUC_NGHI_QUYET", "appendix")
 

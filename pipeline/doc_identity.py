@@ -73,6 +73,37 @@ def is_quyet_dinh_type(doc_type: str | None) -> bool:
     return bool(doc_type) and str(doc_type).upper().startswith("QUYET_DINH")
 
 
+def looks_like_standalone_minutes(header: str, full_text: str = "") -> bool:
+    """
+    Biên bản / trích biên bản / họp chi bộ|chi đoàn — độc lập với Quyết định.
+    Dùng unidecode + hint rộng vì OCR viết tay thường méo.
+    """
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:900]).lower()
+    strong = (
+        "bien ban",
+        "trich bien ban",
+        "trich bb",
+        "hop chi bo",
+        "hop chi doan",
+        "hop to dang",
+        "xet chuyen dang chinh thuc",
+        "xet chuyen dang vien chinh thuc",
+        "chuyen dang chinh thuc",
+    )
+    if any(h in blob for h in strong):
+        return True
+    # OCR méo: "trich" + "bien" tách, hoặc Phần 1/2 + biểu quyết
+    soft_pair = (
+        ("trich", "bien"),
+        ("hop", "chi bo"),
+        ("hop", "chi doan"),
+        ("phan 1", "phan 2"),
+        ("bieu quyet", "100"),
+        ("y kien 1", "y kien 2"),
+    )
+    return any(a in blob and b in blob for a, b in soft_pair)
+
+
 def should_force_new_document(
     open_doc_type: str | None,
     open_year: int | None,

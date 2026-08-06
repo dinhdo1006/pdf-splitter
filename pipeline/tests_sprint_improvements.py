@@ -145,16 +145,50 @@ def test_reattach_sandwich_not_into_quyet_dinh_minutes() -> None:
     groups, orphans, decisions = reattach_orphans([g], [29], signals)
     assert groups[0].page_numbers == [28, 30]
     assert orphans == [29]
-    assert decisions[0].reason == "minutes_between_quyet_dinh_keep_orphan"
+    assert decisions[0].reason == "no_sandwich_into_quyet_dinh"
     print("  OK  reattach_sandwich_not_into_quyet_dinh_minutes")
 
 
+def test_quyet_dinh_not_swallow_bien_ban() -> None:
+    det = BoundaryDetector()
+    d1 = det.process_page(
+        _sig(
+            28,
+            size="A4_MEDIUM",
+            matched="QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC",
+            header="SO: 07 QN-DB NGHI QUYET",
+            eod=True,
+            eod_conf=0.9,
+        )
+    )
+    assert d1.page_class == PageClass.NEW_DOCUMENT
+    d2 = det.process_page(
+        _sig(
+            29,
+            size="A4_MEDIUM",
+            header="TRICH BIEN BAN HOP CHI BO",
+            full="xet chuyen dang chinh thuc Pham Huu Luat",
+        )
+    )
+    assert d2.page_class == PageClass.ORPHAN_PAGE
+    # Trang tiếp không được soft-cont vào QĐ đã đóng
+    d3 = det.process_page(
+        _sig(30, size="A4_MEDIUM", header="Phan 3 y kien tham gia", full="y kien 1 ...")
+    )
+    assert d3.page_class != PageClass.CONFIRMED_CONTINUATION
+    groups, orphans = det.finalize()
+    qd = next(g for g in groups if g.doc_type and g.doc_type.startswith("QUYET_DINH"))
+    assert qd.page_numbers == [28]
+    assert 29 in orphans
+    print("  OK  quyet_dinh_not_swallow_bien_ban")
+
+
 def test_reattach_case4_size() -> None:
-    # prev không phải MULTI_PAGE_FORM → Case 2 không khớp; Case 4 size khớp
+    # prev không phải MULTI_PAGE_FORM / QĐ → Case 2 không khớp; Case 4 size khớp
     g = DocumentGroup(
         group_id=1,
-        raw_title="QD",
-        doc_type="QUYET_DINH_KET_NAP_DANG_VIEN",
+        raw_title="GT",
+        doc_type="GIAY_GIOI_THIEU_SINH_HOAT_DANG_CHINH_THUC",
         page_numbers=[3, 4],
         page_size_group="BOOKLET_SMALL",
     )
@@ -390,6 +424,7 @@ def main() -> int:
         test_size_change_is_new,
         test_reattach_sandwich,
         test_reattach_sandwich_not_into_quyet_dinh_minutes,
+        test_quyet_dinh_not_swallow_bien_ban,
         test_reattach_case4_size,
         test_reattach_trailing_phieu_dang_vien_page,
         test_eod_signature_label,
