@@ -444,6 +444,60 @@ def test_identity_extract_from_phieu_and_cli_override() -> None:
     print("  OK  identity_extract_from_phieu_and_cli_override")
 
 
+def test_year_from_thang_nam_and_ocr_blob() -> None:
+    from pipeline.year_aware_sequencer import (
+        DocRecord,
+        YearAwareSequencer,
+        extract_year_robust,
+    )
+
+    assert extract_year_robust("Ha Noi, ngay 06 thang 01 nam 1995") == 1995
+    assert extract_year_robust("ban hanh ngay 15/11/1994") == 1994
+
+    seq = YearAwareSequencer()
+    records = [
+        DocRecord(
+            doc_type_key="BAN_TU_KIEM_DIEM_HANG_NAM",
+            raw_title="BAN TU KIEM DIEM",
+            page_numbers=[1],
+            pdf_order=0,
+            ocr_blob="Nam 2018 kiem diem dang vien",
+        ),
+        DocRecord(
+            doc_type_key="BAN_TU_KIEM_DIEM_HANG_NAM",
+            raw_title="BAN TU KIEM DIEM",
+            page_numbers=[2],
+            pdf_order=1,
+            ocr_blob="Nam 2020 kiem diem dang vien",
+        ),
+    ]
+    seq.assign_sequence(records)
+    by_order = {r.pdf_order: r for r in records}
+    assert by_order[0].sequence_number == 1
+    assert by_order[1].sequence_number == 2
+    assert by_order[0].doc_year == 2018
+    assert by_order[1].doc_year == 2020
+    print("  OK  year_from_thang_nam_and_ocr_blob")
+
+
+def test_orphan_review_namer() -> None:
+    from pipeline.review_namer import orphan_review_filename
+
+    toc = _sig(20, toc=True, header="MUC LUC TAI LIEU")
+    assert orphan_review_filename(20, toc).startswith("MUC_LUC_page_0020")
+
+    bb = _sig(
+        29,
+        header="TRICH BIEN BAN HOP CHI BO",
+        full="xet chuyen dang chinh thuc",
+    )
+    assert orphan_review_filename(29, bb).startswith("BIEN_BAN_page_0029")
+
+    plain = _sig(40, header="xyz")
+    assert orphan_review_filename(40, plain).startswith("ORPHAN_page_0040")
+    print("  OK  orphan_review_namer")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -470,6 +524,8 @@ def main() -> int:
         test_manifest_without_co_khong,
         test_prev_eod_boost,
         test_identity_extract_from_phieu_and_cli_override,
+        test_year_from_thang_nam_and_ocr_blob,
+        test_orphan_review_namer,
     ]
     failed = 0
     for t in tests:

@@ -57,6 +57,7 @@ class DocRecord:
         doc_day:         Ngày ban hành (None nếu chưa biết).
         sequence_number: Số thứ tự trong nhóm cùng loại.
                          0 = chưa gán hoặc nhóm chỉ có 1 tài liệu (không cần số).
+        ocr_blob:        OCR đầy đủ hơn (header+full các trang) để bổ sung năm.
     """
     doc_type_key:    str
     raw_title:       str
@@ -66,6 +67,7 @@ class DocRecord:
     doc_month:       Optional[int] = None
     doc_day:         Optional[int] = None
     sequence_number: int           = 0
+    ocr_blob:        str           = ""
 
 
 # ── Năm / ngày extraction ─────────────────────────────────────────────────────
@@ -134,6 +136,28 @@ def extract_year_robust(text: str) -> Optional[int]:
         except (ValueError, IndexError):
             continue
 
+    # Pattern 2b — "ngày 06 tháng 01 năm 1995" / "thang 01 nam 1995"
+    for m in re.finditer(
+        r"(?:ng[àa]y\s+\d{1,2}\s+)?th[aá]ng\s+\d{1,2}\s+n[aă]m\s+(\d{4})",
+        fixed,
+        re.IGNORECASE,
+    ):
+        try:
+            y = int(m.group(1))
+            if _is_valid_year(y):
+                return y
+        except (ValueError, IndexError):
+            continue
+
+    # Pattern 2c — bare DD/MM/YYYY
+    for m in re.finditer(r"\b\d{1,2}[/\-\.]\d{1,2}[/\-\.](\d{4})\b", fixed):
+        try:
+            y = int(m.group(1))
+            if _is_valid_year(y):
+                return y
+        except (ValueError, IndexError):
+            continue
+
     # Pattern 3 — số 4 chữ số đứng riêng (ưu tiên thấp nhất — lấy cái đầu tiên hợp lệ)
     for m in re.finditer(r"\b(\d{4})\b", fixed):
         try:
@@ -169,27 +193,37 @@ def extract_date_components(
 
     fixed = _apply_ocr_fixup(text)
 
-    pattern = re.compile(
-        r"ng[àa]y\s+(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{4})",
-        re.IGNORECASE,
-    )
-    for m in pattern.finditer(fixed):
-        try:
-            day   = int(m.group(1))
-            month = int(m.group(2))
-            year  = int(m.group(3))
+    patterns = [
+        re.compile(
+            r"ng[àa]y\s+(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{4})",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"ng[àa]y\s+(\d{1,2})\s+th[aá]ng\s+(\d{1,2})\s+n[aă]m\s+(\d{4})",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"\b(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{4})\b",
+        ),
+    ]
+    for pattern in patterns:
+        for m in pattern.finditer(fixed):
+            try:
+                day = int(m.group(1))
+                month = int(m.group(2))
+                year = int(m.group(3))
 
-            day_ok   = 1 <= day   <= 31
-            month_ok = 1 <= month <= 12
-            year_ok  = _is_valid_year(year)
+                day_ok = 1 <= day <= 31
+                month_ok = 1 <= month <= 12
+                year_ok = _is_valid_year(year)
 
-            return (
-                year  if year_ok  else None,
-                month if month_ok else None,
-                day   if day_ok   else None,
-            )
-        except (ValueError, IndexError):
-            continue
+                return (
+                    year if year_ok else None,
+                    month if month_ok else None,
+                    day if day_ok else None,
+                )
+            except (ValueError, IndexError):
+                continue
 
     return None, None, None
 
@@ -232,25 +266,27 @@ class YearAwareSequencer:
             groups[rec.doc_type_key].append(rec)
 
         for key, grp in groups.items():
-            # 1. Điền năm/tháng/ngày còn thiếu từ raw_title
+            # 1. Điền năm/tháng/ngày còn thiếu từ raw_title + ocr_blob
             for rec in grp:
+                blob = "\n".join(
+                    x for x in (rec.raw_title or "", rec.ocr_blob or "") if x
+                )
                 if rec.doc_year is None:
-                    extracted_year = extract_year_robust(rec.raw_title)
+                    extracted_year = extract_year_robust(blob)
                     if extracted_year is not None:
                         rec.doc_year = extracted_year
                         logger.debug(
-                            "[sequencer] Điền doc_year={} từ raw_title "
+                            "[sequencer] Điền doc_year={} từ OCR blob "
                             "cho pdf_order={} (key={!r})",
                             extracted_year, rec.pdf_order, key,
                         )
-                    # Luôn thử lấy thêm month/day
-                    y, mo, d = extract_date_components(rec.raw_title)
-                    if rec.doc_year is None and y is not None:
-                        rec.doc_year = y
-                    if rec.doc_month is None and mo is not None:
-                        rec.doc_month = mo
-                    if rec.doc_day is None and d is not None:
-                        rec.doc_day = d
+                y, mo, d = extract_date_components(blob)
+                if rec.doc_year is None and y is not None:
+                    rec.doc_year = y
+                if rec.doc_month is None and mo is not None:
+                    rec.doc_month = mo
+                if rec.doc_day is None and d is not None:
+                    rec.doc_day = d
 
             # 2. Log warning cho record vẫn không có năm
             no_year_count = sum(1 for r in grp if r.doc_year is None)

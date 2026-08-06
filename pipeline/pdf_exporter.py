@@ -14,6 +14,7 @@ import config
 from pipeline.boundary_detector import DocumentGroup
 from pipeline.party_catalog import PARTY_DOC_CATALOG
 from pipeline.party_filename_resolver import build_filename
+from pipeline.review_namer import orphan_review_filename
 
 
 class PDFExporter:
@@ -89,14 +90,21 @@ class PDFExporter:
         finally:
             out_doc.close()
 
-    def export_orphan_page(self, page_num: int) -> str | None:
-        """Xuất 1 trang mồ côi → _review/orphans/ORPHAN_page_XXXX.pdf"""
+    def export_orphan_page(
+        self,
+        page_num: int,
+        filename: str | None = None,
+        dest_dir: Path | None = None,
+    ) -> str | None:
+        """Xuất 1 trang mồ côi → _review/orphans/<label>_page_XXXX.pdf"""
         if page_num < 1 or page_num > len(self.src_doc):
             logger.error(f"Orphan page {page_num} out of range")
             return None
 
-        filename = f"ORPHAN_page_{page_num:04d}.pdf"
-        output_path = self._resolve_unique_path(self.orphans_dir, filename)
+        name = filename or f"ORPHAN_page_{page_num:04d}.pdf"
+        orphan_dir = dest_dir or self.orphans_dir
+        orphan_dir.mkdir(parents=True, exist_ok=True)
+        output_path = self._resolve_unique_path(orphan_dir, name)
         out_doc = fitz.open()
         try:
             out_doc.insert_pdf(
@@ -160,6 +168,7 @@ class PDFExporter:
         groups: list[DocumentGroup],
         orphan_pages: list[int] | None = None,
         docs_dir: Path | None = None,
+        page_signals: dict | None = None,
     ) -> dict:
         """
         Export catalog groups + orphans + tentative.
@@ -173,12 +182,17 @@ class PDFExporter:
             }
         """
         orphan_pages = orphan_pages or []
+        signals = page_signals or {}
         dest = docs_dir or self.output_dir
         dest.mkdir(parents=True, exist_ok=True)
-        review_misc = self.review_dir / "khac"
+        # _review nằm cạnh file success trong member_dir (Phụ lục 2)
+        review_root = dest / "_review"
+        review_misc = review_root / "khac"
+        orphans_dir = review_root / "orphans"
+        tentative_dir = review_root / "tentative"
         review_misc.mkdir(parents=True, exist_ok=True)
-        self.orphans_dir.mkdir(parents=True, exist_ok=True)
-        self.tentative_dir.mkdir(parents=True, exist_ok=True)
+        orphans_dir.mkdir(parents=True, exist_ok=True)
+        tentative_dir.mkdir(parents=True, exist_ok=True)
 
         catalog_keys = [
             (g.doc_type or "").upper()
@@ -198,7 +212,7 @@ class PDFExporter:
                 if bucket == "success":
                     target = dest
                 elif bucket == "tentative":
-                    target = self.tentative_dir
+                    target = tentative_dir
                 else:
                     target = review_misc
                 output_path = self.export_group(group, filename, dest_dir=target)
@@ -232,7 +246,10 @@ class PDFExporter:
                 continue
 
         for page_num in orphan_pages:
-            path = self.export_orphan_page(page_num)
+            label = orphan_review_filename(page_num, signals.get(page_num))
+            path = self.export_orphan_page(
+                page_num, filename=label, dest_dir=orphans_dir
+            )
             if path:
                 orphans.append(
                     {
@@ -240,6 +257,9 @@ class PDFExporter:
                         "filename": Path(path).name,
                         "output_path": path,
                         "bucket": "orphan",
+                        "review_label": Path(path).stem.rsplit("_page_", 1)[0]
+                        if "_page_" in Path(path).stem
+                        else "ORPHAN",
                     }
                 )
 

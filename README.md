@@ -47,10 +47,11 @@ python main.py -i hoso.pdf -o ./output \
 Ingest (pt size) → Preprocess → OCR → Signal (+ page_size_group, EOD)
   → BoundaryDetector 3-state (+ soft booklet cont, size change, prev EOD)
   → Pass-2 OrphanReattacher (attach_prev only)
-  → YearAwareSequencer
+  → YearAwareSequencer (năm từ full OCR blob → .N)
   → IdentityExtractor (họ tên/CCCD từ OCR, CLI override)
   → Export STT.Ten[.N].pdf vào member_dir Phụ lục 2 khi đủ identity
-  → manifest.json (+ member_identity + validation Mục Lục)
+  → orphan review: MUC_LUC_/BIEN_BAN_/ORPHAN_page_XXXX.pdf
+  → manifest.json + member_dir/manifest_ho_so.json
 ```
 
 **Page size groups (gold signal từ `page.rect` pt):**

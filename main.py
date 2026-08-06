@@ -490,6 +490,16 @@ def main() -> int:
 
     from pipeline.year_aware_sequencer import YearAwareSequencer, DocRecord
 
+    def _group_ocr_blob(g) -> str:
+        chunks: list[str] = []
+        for pn in g.page_numbers[:4]:
+            sig = all_signals.get(pn)
+            if sig is None:
+                continue
+            chunks.append(getattr(sig, "header_text", "") or "")
+            chunks.append((getattr(sig, "full_text", "") or "")[:800])
+        return "\n".join(chunks)
+
     year_sequencer = YearAwareSequencer()
     doc_records = [
         DocRecord(
@@ -498,6 +508,7 @@ def main() -> int:
             page_numbers=list(g.page_numbers),
             pdf_order=i,
             doc_year=g.doc_year,
+            ocr_blob=_group_ocr_blob(g),
         )
         for i, g in enumerate(groups)
     ]
@@ -565,7 +576,24 @@ def main() -> int:
         groups,
         orphan_pages=orphan_pages,
         docs_dir=docs_dir,
+        page_signals=all_signals,
     )
+
+    # Manifest Phụ lục 2 trong member_dir (khi docs_dir ≠ flat output)
+    try:
+        if docs_dir.resolve() != output_dir.resolve():
+            from pipeline.phu_luc2_manifest import write_member_manifest
+
+            write_member_manifest(
+                docs_dir,
+                export_result=export_result,
+                member_identity=(
+                    member_identity.to_dict() if member_identity is not None else None
+                ),
+                source_pdf=str(input_path),
+            )
+    except Exception as mex:
+        logger.error(f"write manifest_ho_so.json failed: {mex}")
 
     # Manifest extras: reattach + validation
     manifest_extra: dict = {}
