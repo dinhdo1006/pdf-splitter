@@ -117,36 +117,79 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_docs_dir(args: argparse.Namespace, output_dir: Path) -> Path:
+def resolve_docs_dir(
+    args: argparse.Namespace,
+    output_dir: Path,
+    identity=None,
+) -> Path:
     """
-    Giai đoạn 1: flat output_dir.
-    Giai đoạn 2: PartyPathBuilder khi đủ --m1..m5 --cccd --ho-ten.
+    Dựng thư mục đảng viên Phụ lục 2 khi đủ họ tên + CCCD.
+
+    Ưu tiên: CLI > OCR identity > bỏ qua (flat output).
+    M1–M5: CLI > OCR > IDENTITY_DEFAULT_M_CODES.
     """
-    keys = (args.m1, args.m2, args.m3, args.m4, args.m5, args.cccd, args.ho_ten)
-    if all(k is None for k in keys):
-        return output_dir
-
-    if any(k is None for k in keys):
-        logger.warning(
-            "Thiếu một phần --m1..m5/--cccd/--ho-ten — xuất flat (Giai đoạn 1). "
-            "Cần đủ cả 7 tham số cho cây thư mục Phụ lục 2."
-        )
-        return output_dir
-
+    from pipeline.identity_extractor import MemberIdentity, apply_cli_overrides
     from pipeline.party_path_builder import PartyPathBuilder
 
-    builder = PartyPathBuilder(
-        base_output_dir=output_dir,
+    ocr_ident = identity or MemberIdentity()
+    merged = apply_cli_overrides(
+        ocr_ident,
+        ho_ten=args.ho_ten,
+        cccd=args.cccd,
         m1=args.m1,
         m2=args.m2,
         m3=args.m3,
         m4=args.m4,
         m5=args.m5,
-        so_cccd=args.cccd,
-        ho_ten_dang_vien=args.ho_ten,
+    )
+
+    if not merged.has_member_folder_keys:
+        if any(
+            x is not None
+            for x in (args.m1, args.m2, args.m3, args.m4, args.m5, args.cccd, args.ho_ten)
+        ):
+            logger.warning(
+                "Thiếu họ tên hoặc CCCD (CLI/OCR) — xuất flat. "
+                "Cần đủ để tạo cây thư mục Phụ lục 2."
+            )
+        elif not getattr(config, "IDENTITY_AUTO_PATH", True):
+            logger.info("IDENTITY_AUTO_PATH=False — xuất flat.")
+        return output_dir
+
+    defaults = getattr(config, "IDENTITY_DEFAULT_M_CODES", ("0", "0", "0", "0", "0"))
+    m1 = merged.m1 if merged.m1 is not None else defaults[0]
+    m2 = merged.m2 if merged.m2 is not None else defaults[1]
+    m3 = merged.m3 if merged.m3 is not None else defaults[2]
+    m4 = merged.m4 if merged.m4 is not None else defaults[3]
+    m5 = merged.m5 if merged.m5 is not None else defaults[4]
+
+    used_default_m = all(
+        getattr(merged, f"m{i}") is None for i in range(1, 6)
+    ) and not any(
+        getattr(args, f"m{i}") is not None for i in range(1, 6)
+    )
+    if used_default_m:
+        logger.warning(
+            f"Chưa có mã cấp ủy M1–M5 — dùng mặc định "
+            f"{m1}.{m2}.{m3}.{m4}.{m5}. Nên truyền --m1..m5 khi biết."
+        )
+
+    builder = PartyPathBuilder(
+        base_output_dir=output_dir,
+        m1=m1,
+        m2=m2,
+        m3=m3,
+        m4=m4,
+        m5=m5,
+        so_cccd=merged.cccd,
+        ho_ten_dang_vien=merged.ho_ten,
     )
     member_dir = builder.ensure_dirs()
-    logger.info(f"Giai đoạn 2 — member dir: {member_dir}")
+    logger.info(
+        f"Phụ lục 2 member dir: {member_dir} "
+        f"(ho_ten={merged.ho_ten!r}, cccd={merged.cccd!r}, "
+        f"conf={merged.confidence:.2f})"
+    )
     return member_dir
 
 
@@ -211,7 +254,8 @@ def main() -> int:
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
-    docs_dir = resolve_docs_dir(args, output_dir)
+    # docs_dir quyết định sau OCR (identity từ scan + CLI override)
+    docs_dir = output_dir
     preprocess_enabled = not args.no_preprocess
 
     try:
@@ -479,6 +523,38 @@ def main() -> int:
     except Exception as _sum_exc:
         logger.error(f"build_year_summary() lỗi: {_sum_exc}")
 
+    # Identity từ OCR → cây thư mục Phụ lục 2 (CLI override)
+    member_identity = None
+    try:
+        from pipeline.identity_extractor import extract_member_identity_from_signals
+
+        ocr_ident = extract_member_identity_from_signals(all_signals)
+        # Bổ sung họ tên từ mục lục nếu OCR phiếu thiếu
+        if (
+            not ocr_ident.ho_ten
+            and hoso_manifest is not None
+            and getattr(hoso_manifest, "party_member_name", None)
+        ):
+            ocr_ident.ho_ten = hoso_manifest.party_member_name
+            ocr_ident.sources.append("ho_ten:hoso_manifest")
+            ocr_ident.confidence = max(ocr_ident.confidence, 0.5)
+        docs_dir = resolve_docs_dir(args, output_dir, ocr_ident)
+        from pipeline.identity_extractor import apply_cli_overrides
+
+        member_identity = apply_cli_overrides(
+            ocr_ident,
+            ho_ten=args.ho_ten,
+            cccd=args.cccd,
+            m1=args.m1,
+            m2=args.m2,
+            m3=args.m3,
+            m4=args.m4,
+            m5=args.m5,
+        )
+    except Exception as iex:
+        logger.error(f"Identity extract / path resolve failed: {iex}")
+        docs_dir = output_dir
+
     if not groups and not orphan_pages:
         logger.warning("Nothing to export")
         exporter.close()
@@ -493,6 +569,11 @@ def main() -> int:
 
     # Manifest extras: reattach + validation
     manifest_extra: dict = {}
+    if member_identity is not None:
+        try:
+            manifest_extra["member_identity"] = member_identity.to_dict()
+        except Exception:
+            pass
     try:
         from pipeline.orphan_reattacher import decisions_to_dicts
 

@@ -1,0 +1,334 @@
+"""
+pipeline/identity_extractor.py
+==============================
+Trích họ tên + CCCD/CMND (+ mã cấp ủy nếu có) từ OCR phiếu ĐV / mục lục / lý lịch
+để dựng đường dẫn Phụ lục 2 khi thiếu CLI.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import asdict, dataclass, field
+from typing import Any, Iterable, Optional
+
+from loguru import logger
+from unidecode import unidecode
+
+
+@dataclass
+class MemberIdentity:
+    ho_ten: Optional[str] = None
+    cccd: Optional[str] = None
+    m1: Optional[str] = None
+    m2: Optional[str] = None
+    m3: Optional[str] = None
+    m4: Optional[str] = None
+    m5: Optional[str] = None
+    confidence: float = 0.0
+    sources: list[str] = field(default_factory=list)
+
+    @property
+    def has_member_folder_keys(self) -> bool:
+        return bool(self.ho_ten and self.cccd)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+# Họ tên: ưu tiên nhãn form phiếu / mục lục
+_NAME_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(
+        r"(?:ho\s*(?:va\s*)?ten\s*(?:khai\s*sinh)?|ho\s*ten)\s*[:\.]?\s*"
+        r"([A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹ\s]{4,50})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:cua\s+)?dong\s*chi\s*[:\.]?\s*"
+        r"([A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹ\s]{4,50})",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"ho\s*so\s*dang\s*vien\s*(?:cua\s*)?(?:dong\s*chi\s*)?[:\.]?\s*"
+        r"([A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹ\s]{4,50})",
+        re.IGNORECASE,
+    ),
+]
+
+_CCCD_LABELED = re.compile(
+    r"(?:so\s*)?(?:cccd|cccd\/cmnd|cmnd|can\s*cuoc(?:\s*cong\s*dan)?|"
+    r"giay\s*cmnd|so\s*cmnd)\s*[:\.]?\s*([0-9OIl]{8,14})",
+    re.IGNORECASE,
+)
+_CCCD_BARE = re.compile(r"\b([0-9]{9}|[0-9]{12})\b")
+
+# Mã cấp ủy dạng 93.015.000.001.002 hoặc 93.000.036.001.015
+_M_CODES_RE = re.compile(
+    r"\b(\d{1,2})\s*[.\-]\s*(\d{1,3})\s*[.\-]\s*(\d{1,3})\s*[.\-]\s*"
+    r"(\d{1,3})\s*[.\-]\s*(\d{1,3})\b"
+)
+
+_NOISE_NAME = frozenset(
+    {
+        "dang",
+        "cong",
+        "san",
+        "viet",
+        "nam",
+        "phieu",
+        "dang vien",
+        "ly lich",
+        "muc luc",
+        "tai lieu",
+        "khong",
+        "co",
+    }
+)
+
+
+def _ocr_digit_fixup(raw: str) -> str:
+    return (
+        (raw or "")
+        .replace("O", "0")
+        .replace("o", "0")
+        .replace("I", "1")
+        .replace("l", "1")
+    )
+
+
+def _clean_person_name(raw: str) -> Optional[str]:
+    if not raw:
+        return None
+    name = re.sub(r"[\d:;|/\\]+", " ", raw)
+    name = re.sub(r"\s+", " ", name).strip(" .-_,")
+    # Cắt phần sau nhãn phụ
+    name = re.split(
+        r"\b(nam|nu|sinh|ngay|que|quan|thuong|tru|dan|toc)\b",
+        name,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip(" .-_,")
+    parts = [p for p in name.split() if p]
+    if len(parts) < 2 or len(parts) > 6:
+        return None
+    ascii_low = unidecode(name).lower()
+    if any(n in ascii_low for n in _NOISE_NAME) and len(parts) <= 2:
+        return None
+    # Title-case từng từ (giữ dấu)
+    cleaned = " ".join(p[:1].upper() + p[1:].lower() for p in parts)
+    if len(cleaned) < 5:
+        return None
+    return cleaned
+
+
+def _extract_name_from_blob(blob: str) -> Optional[str]:
+    for cre in _NAME_PATTERNS:
+        m = cre.search(blob)
+        if not m:
+            continue
+        name = _clean_person_name(m.group(1))
+        if name:
+            return name
+    return None
+
+
+def _extract_cccd_from_blob(blob: str) -> Optional[str]:
+    ascii_blob = unidecode(blob)
+    m = _CCCD_LABELED.search(ascii_blob)
+    if m:
+        digits = re.sub(r"\D", "", _ocr_digit_fixup(m.group(1)))
+        if len(digits) in (9, 12):
+            return digits
+    # Ưu tiên 12 số; tránh năm 19xx/20xx
+    candidates = []
+    for m in _CCCD_BARE.finditer(re.sub(r"\s+", "", ascii_blob)):
+        d = m.group(1)
+        if d.startswith(("19", "20")) and len(d) == 4:
+            continue
+        if len(d) == 12:
+            candidates.insert(0, d)
+        elif len(d) == 9:
+            candidates.append(d)
+    return candidates[0] if candidates else None
+
+
+def _extract_m_codes(blob: str) -> Optional[tuple[str, str, str, str, str]]:
+    ascii_blob = unidecode(blob)
+    m = _M_CODES_RE.search(ascii_blob)
+    if not m:
+        return None
+    return tuple(str(int(g)) for g in m.groups())  # type: ignore[return-value]
+
+
+def extract_member_identity_from_text(
+    text: str,
+    *,
+    source: str = "ocr",
+) -> MemberIdentity:
+    """Trích identity từ một khối OCR."""
+    ident = MemberIdentity()
+    if not text or not text.strip():
+        return ident
+
+    blob = text[:4000]
+    name = _extract_name_from_blob(blob)
+    if name:
+        ident.ho_ten = name
+        ident.sources.append(f"ho_ten:{source}")
+        ident.confidence += 0.45
+
+    cccd = _extract_cccd_from_blob(blob)
+    if cccd:
+        ident.cccd = cccd
+        ident.sources.append(f"cccd:{source}")
+        ident.confidence += 0.45
+
+    m_codes = _extract_m_codes(blob)
+    if m_codes:
+        ident.m1, ident.m2, ident.m3, ident.m4, ident.m5 = m_codes
+        ident.sources.append(f"m_codes:{source}")
+        ident.confidence += 0.15
+
+    ident.confidence = min(1.0, ident.confidence)
+    return ident
+
+
+def merge_identities(*parts: MemberIdentity) -> MemberIdentity:
+    """Gộp nhiều kết quả; field đã có giữ nguyên (ưu tiên phần đứng trước)."""
+    out = MemberIdentity()
+    for p in parts:
+        if not p:
+            continue
+        if out.ho_ten is None and p.ho_ten:
+            out.ho_ten = p.ho_ten
+        if out.cccd is None and p.cccd:
+            out.cccd = p.cccd
+        for attr in ("m1", "m2", "m3", "m4", "m5"):
+            if getattr(out, attr) is None and getattr(p, attr) is not None:
+                setattr(out, attr, getattr(p, attr))
+        out.sources.extend(p.sources)
+        out.confidence = max(out.confidence, p.confidence)
+    # Recompute soft confidence
+    score = 0.0
+    if out.ho_ten:
+        score += 0.45
+    if out.cccd:
+        score += 0.45
+    if out.m1 is not None:
+        score += 0.10
+    out.confidence = min(1.0, max(out.confidence, score))
+    return out
+
+
+def extract_member_identity_from_signals(
+    signals: dict[int, Any],
+    *,
+    prefer_doc_types: Iterable[str] | None = None,
+) -> MemberIdentity:
+    """
+    Quét PageSignal theo ưu tiên: Phiếu ĐV → Mục lục → Lý lịch → còn lại.
+    """
+    prefer = {
+        (t or "").upper()
+        for t in (
+            prefer_doc_types
+            or (
+                "PHIEU_DANG_VIEN",
+                "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+                "LY_LICH_DANG_VIEN",
+                "LY_LICH_NGUOI_XIN_VAO_DANG",
+            )
+        )
+    }
+
+    def _rank(pn: int, sig: Any) -> tuple[int, int]:
+        dtype = (getattr(sig, "matched_doc_type", "") or "").upper()
+        if getattr(sig, "is_toc", False):
+            tier = 1
+        elif dtype in prefer and "PHIEU" in dtype:
+            tier = 0
+        elif dtype in prefer:
+            tier = 2
+        else:
+            tier = 3
+        return (tier, pn)
+
+    parts: list[MemberIdentity] = []
+    for pn, sig in sorted(signals.items(), key=lambda kv: _rank(kv[0], kv[1])):
+        header = getattr(sig, "header_text", "") or ""
+        full = getattr(sig, "full_text", "") or ""
+        blob = header + "\n" + full
+        if len(blob.strip()) < 10:
+            continue
+        dtype = (getattr(sig, "matched_doc_type", "") or "") or (
+            "toc" if getattr(sig, "is_toc", False) else f"page{pn}"
+        )
+        part = extract_member_identity_from_text(blob, source=f"{dtype}@{pn}")
+        if part.ho_ten or part.cccd or part.m1 is not None:
+            parts.append(part)
+            logger.debug(
+                f"[identity] page {pn}: name={part.ho_ten!r} cccd={part.cccd!r}"
+            )
+        # Đủ họ tên + CCCD thì dừng sớm
+        merged = merge_identities(*parts)
+        if merged.has_member_folder_keys:
+            logger.info(
+                f"[identity] extracted ho_ten={merged.ho_ten!r} "
+                f"cccd={merged.cccd!r} conf={merged.confidence:.2f}"
+            )
+            return merged
+
+    merged = merge_identities(*parts)
+    if merged.ho_ten or merged.cccd:
+        logger.info(
+            f"[identity] partial ho_ten={merged.ho_ten!r} "
+            f"cccd={merged.cccd!r} conf={merged.confidence:.2f}"
+        )
+    else:
+        logger.warning("[identity] không trích được họ tên/CCCD từ OCR")
+    return merged
+
+
+def apply_cli_overrides(
+    ocr_ident: MemberIdentity,
+    *,
+    ho_ten: Optional[str] = None,
+    cccd: Optional[str] = None,
+    m1: Optional[str] = None,
+    m2: Optional[str] = None,
+    m3: Optional[str] = None,
+    m4: Optional[str] = None,
+    m5: Optional[str] = None,
+) -> MemberIdentity:
+    """CLI thắng OCR khi được cung cấp."""
+    out = MemberIdentity(
+        ho_ten=ocr_ident.ho_ten,
+        cccd=ocr_ident.cccd,
+        m1=ocr_ident.m1,
+        m2=ocr_ident.m2,
+        m3=ocr_ident.m3,
+        m4=ocr_ident.m4,
+        m5=ocr_ident.m5,
+        confidence=ocr_ident.confidence,
+        sources=list(ocr_ident.sources),
+    )
+    if ho_ten:
+        out.ho_ten = ho_ten.strip()
+        out.sources.append("ho_ten:cli")
+    if cccd:
+        digits = re.sub(r"\D", "", cccd)
+        if digits:
+            out.cccd = digits
+            out.sources.append("cccd:cli")
+    for attr, val in (
+        ("m1", m1),
+        ("m2", m2),
+        ("m3", m3),
+        ("m4", m4),
+        ("m5", m5),
+    ):
+        if val is not None and str(val).strip() != "":
+            setattr(out, attr, str(val).strip())
+            out.sources.append(f"{attr}:cli")
+    if out.has_member_folder_keys:
+        out.confidence = max(out.confidence, 0.9 if ho_ten and cccd else 0.7)
+    return out

@@ -413,6 +413,37 @@ def test_prev_eod_boost() -> None:
     print("  OK  prev_eod_boost")
 
 
+def test_identity_extract_from_phieu_and_cli_override() -> None:
+    from unidecode import unidecode
+
+    from pipeline.identity_extractor import (
+        apply_cli_overrides,
+        extract_member_identity_from_text,
+    )
+
+    text = (
+        "DANG CONG SAN VIET NAM\n"
+        "MAU 2 - HSDV\n"
+        "PHIEU DANG VIEN\n"
+        "01) Ho va ten khai sinh: Pham Huu Luat\n"
+        "So CCCD: 001234567890\n"
+    )
+    ident = extract_member_identity_from_text(text, source="phieu")
+    assert ident.ho_ten is not None
+    assert "Luat" in ident.ho_ten or "luat" in ident.ho_ten.lower()
+    assert ident.cccd == "001234567890"
+
+    toc = "MUC LUC Tai lieu trong ho so dang vien cua dong chi: Nguyen Van A"
+    ident2 = extract_member_identity_from_text(toc, source="toc")
+    assert ident2.ho_ten is not None
+    assert "Nguyen" in unidecode(ident2.ho_ten)
+
+    merged = apply_cli_overrides(ident, ho_ten="Tran Thi B", cccd=None)
+    assert merged.ho_ten == "Tran Thi B"
+    assert merged.cccd == "001234567890"
+    print("  OK  identity_extract_from_phieu_and_cli_override")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -438,6 +469,7 @@ def main() -> int:
         test_force_phieu_and_quyet_dinh_split,
         test_manifest_without_co_khong,
         test_prev_eod_boost,
+        test_identity_extract_from_phieu_and_cli_override,
     ]
     failed = 0
     for t in tests:

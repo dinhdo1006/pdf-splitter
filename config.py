@@ -159,6 +159,12 @@ YEAR_MIN_VALID          = 1945   # Năm tối thiểu hợp lệ (lịch sử Đ
 YEAR_MAX_VALID          = 2035   # Năm tối đa hợp lệ
 YEAR_SENTINEL_NO_YEAR   = 9999   # Sentinel: tài liệu không có năm → xếp cuối nhóm
 
+# ── Member identity (Phụ lục 2 path) ─────────────────────────────────
+# Khi OCR/CLI thiếu mã cấp ủy, dùng mặc định để vẫn tạo cây thư mục
+# M1.M2.M3.M4.M5/CCCD_HoTen/ (có thể sửa lại sau khi biết mã thật).
+IDENTITY_DEFAULT_M_CODES = ("0", "0", "0", "0", "0")
+IDENTITY_AUTO_PATH = True  # True = tự dựng path khi có họ tên + CCCD từ OCR
+
 # ── LLM Circuit Breaker ─────────────────────────────────────────────
 LLM_CIRCUIT_OPEN_AFTER  = 3     # Số timeout liên tiếp trước khi ngắt mạch
 LLM_CIRCUIT_RESET_AFTER = 50    # Số trang bỏ qua trước khi thử kết nối lại
