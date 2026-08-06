@@ -19,7 +19,7 @@ CLAHE_TILE_SIZE = (8, 8)
 
 # ── OCR ────────────────────────────────────────────────────────────
 OCR_LANG = "vi"
-OCR_USE_GPU = False
+OCR_USE_GPU = True
 OCR_MIN_CONFIDENCE = 0.40  # Discard blocks below this confidence
 
 # ── Signal Extraction ──────────────────────────────────────────────
