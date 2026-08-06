@@ -108,6 +108,7 @@ class BoundaryDetector:
         self._current_group: DocumentGroup | None = None
         self._groups: list[DocumentGroup] = []
         self._orphan_pages: list[int] = []
+        self._blank_pages: list[int] = []
         self._low_confidence_pages: list[dict] = []
         self._group_counter: int = 0
 
@@ -254,10 +255,22 @@ class BoundaryDetector:
             f"Page {signal.page_num}: ORPHAN_PAGE (group #{open_id} vẫn mở) — {reason}"
         )
 
+    def _close_current_group(self, reason: str) -> None:
+        """Đóng group đang mở (giữ orphan list / không tạo orphan)."""
+        if self._current_group is None:
+            return
+        logger.info(
+            f"Closed document #{self._current_group.group_id} "
+            f"({len(self._current_group.page_numbers)} pages) — {reason}"
+        )
+        self._groups.append(self._current_group)
+        self._current_group = None
+
     def _soft_size_continuation(self, signal: PageSignal) -> bool:
         """
         Soft CONFIRMED_CONTINUATION khi cùng BOOKLET/LANDSCAPE với group đang mở
         và không có catalog hit loại khác.
+        Không áp dụng cho A4 / OTHER.
         """
         if self._current_group is None:
             return False
@@ -271,11 +284,30 @@ class BoundaryDetector:
             open_type = (self._current_group.doc_type or "").upper()
             if signal.matched_doc_type.upper() != open_type:
                 return False
+        # TOC không bao giờ soft-size
+        if getattr(signal, "is_toc", False):
+            return False
         return True
 
+    def _maybe_close_on_size_hard_boundary(self, signal: PageSignal) -> None:
+        """
+        Booklet/landscape → A4 là ranh giới cứng vật lý: đóng group đang mở
+        để trang A4 không bị soft-absorb vào lý lịch booklet.
+        """
+        if self._current_group is None:
+            return
+        open_sg = self._current_group.page_size_group
+        curr_sg = signal.page_size_group or "OTHER"
+        a4 = frozenset({"A4_PORTRAIT", "A4_MEDIUM"})
+        if open_sg in _STRONG_SIZE and curr_sg in a4:
+            self._close_current_group(
+                f"size_hard_boundary({open_sg}->{curr_sg})"
+            )
+
     def process_page(self, signal: PageSignal) -> BoundaryDecision:
-        # 1) Blank → SKIP (không orphan)
+        # 1) Blank → SKIP (không orphan) — ghi nhận để audit đủ trang
         if signal.is_blank:
+            self._blank_pages.append(signal.page_num)
             decision = BoundaryDecision(
                 page_num=signal.page_num,
                 page_class=PageClass.SEPARATOR,
@@ -287,6 +319,9 @@ class BoundaryDetector:
             self._prev_was_blank = True
             logger.debug(f"Page {signal.page_num}: SKIP_BLANK")
             return decision
+
+        # Ranh giới cứng booklet/landscape → A4
+        self._maybe_close_on_size_hard_boundary(signal)
 
         score, score_reason = self._compute_score(signal)
         confidence = self._confidence_label(score)
@@ -301,11 +336,26 @@ class BoundaryDetector:
             "LY_LICH_NGUOI_XIN_VAO_DANG",
         }
 
-        # Soft appendix (Mẫu 2a, biên bản…) → gộp vào host nếu đang mở
+        # Soft appendix (Mẫu 2a…) → gộp vào host kiểm điểm nếu đang mở
+        # KHÔNG soft-attach biên bản thuần vào kiểm điểm (xử lý ở matcher)
         if getattr(signal, "is_appendix", False) and self._current_group is not None:
+            kind = getattr(signal, "appendix_kind", "") or ""
+            if kind == "PHU_LUC_NGHI_QUYET" and not open_doc.startswith("BAN_TU_KIEM"):
+                # Biên bản / nghị quyết độc lập → orphan, không nuốt vào lý lịch
+                self._mark_orphan(signal, f"appendix_standalone[{kind}]")
+                decision = BoundaryDecision(
+                    page_num=signal.page_num,
+                    page_class=PageClass.ORPHAN_PAGE,
+                    score=score,
+                    confidence=confidence,
+                    reasoning=f"orphan[appendix_standalone] | {score_reason}",
+                )
+                self._prev_signal = signal
+                self._prev_was_blank = False
+                return decision
             if open_doc in _APPENDIX_HOST_TYPES or open_doc.startswith("BAN_TU_KIEM"):
                 if self._append_continuation(
-                    signal, f"appendix_soft[{signal.appendix_kind}]"
+                    signal, f"appendix_soft[{kind}]"
                 ):
                     decision = BoundaryDecision(
                         page_num=signal.page_num,
@@ -318,44 +368,50 @@ class BoundaryDetector:
                     self._prev_was_blank = False
                     return decision
 
-        # TOC / mục form lý lịch: không bao giờ NEW từ catalog/heuristic
-        if getattr(signal, "is_toc", False) or getattr(signal, "is_form_section", False):
-            kind = "toc" if getattr(signal, "is_toc", False) else "form_section"
-            if is_ly_lich_open and self._append_continuation(
-                signal, f"{kind}_inside_ly_lich"
+        # TOC: LUÔN orphan — không bao giờ gộp vào lý lịch / soft size
+        if getattr(signal, "is_toc", False):
+            # Đóng booklet/landscape đang mở trước khi orphan TOC
+            if (
+                self._current_group is not None
+                and self._current_group.page_size_group in _STRONG_SIZE
             ):
-                decision = BoundaryDecision(
-                    page_num=signal.page_num,
-                    page_class=PageClass.CONFIRMED_CONTINUATION,
-                    score=score,
-                    confidence=confidence,
-                    reasoning=f"confirmed_cont[{kind}_ly_lich] | {score_reason}",
-                )
-                self._prev_signal = signal
-                self._prev_was_blank = False
-                return decision
-            # Soft size: form section trong booklet đang mở
-            if self._soft_size_continuation(signal) and self._append_continuation(
-                signal, f"{kind}_same_size_group"
-            ):
-                decision = BoundaryDecision(
-                    page_num=signal.page_num,
-                    page_class=PageClass.CONFIRMED_CONTINUATION,
-                    score=score,
-                    confidence=confidence,
-                    reasoning=f"confirmed_cont[{kind}_size] | {score_reason}",
-                )
-                self._prev_signal = signal
-                self._prev_was_blank = False
-                return decision
-            # Không có lý lịch đang mở → orphan (không mở NEW từ mục lục)
-            self._mark_orphan(signal, f"{kind}_not_catalog_document")
+                self._close_current_group("toc_closes_booklet_group")
+            self._mark_orphan(signal, "toc_not_catalog_document")
             decision = BoundaryDecision(
                 page_num=signal.page_num,
                 page_class=PageClass.ORPHAN_PAGE,
                 score=score,
                 confidence=confidence,
-                reasoning=f"orphan[{kind}] | {score_reason}",
+                reasoning=f"orphan[toc] | {score_reason}",
+            )
+            self._prev_signal = signal
+            self._prev_was_blank = False
+            return decision
+
+        # Mục form lý lịch (22), 23)…): chỉ gộp khi đang mở LL CÙNG size group
+        if getattr(signal, "is_form_section", False):
+            if (
+                is_ly_lich_open
+                and self._soft_size_continuation(signal)
+                and self._append_continuation(signal, "form_section_inside_ly_lich")
+            ):
+                decision = BoundaryDecision(
+                    page_num=signal.page_num,
+                    page_class=PageClass.CONFIRMED_CONTINUATION,
+                    score=score,
+                    confidence=confidence,
+                    reasoning=f"confirmed_cont[form_section_ly_lich] | {score_reason}",
+                )
+                self._prev_signal = signal
+                self._prev_was_blank = False
+                return decision
+            self._mark_orphan(signal, "form_section_not_catalog_document")
+            decision = BoundaryDecision(
+                page_num=signal.page_num,
+                page_class=PageClass.ORPHAN_PAGE,
+                score=score,
+                confidence=confidence,
+                reasoning=f"orphan[form_section] | {score_reason}",
             )
             self._prev_signal = signal
             self._prev_was_blank = False
@@ -515,7 +571,8 @@ class BoundaryDetector:
 
         logger.info(
             f"Finalize: {len(self._groups)} documents, "
-            f"{len(self._orphan_pages)} orphan pages"
+            f"{len(self._orphan_pages)} orphan pages, "
+            f"{len(self._blank_pages)} blank pages"
         )
         return list(self._groups), list(self._orphan_pages)
 
@@ -526,6 +583,10 @@ class BoundaryDetector:
     @property
     def orphan_pages(self) -> list[int]:
         return list(self._orphan_pages)
+
+    @property
+    def blank_pages(self) -> list[int]:
+        return list(self._blank_pages)
 
     @property
     def low_confidence_pages(self) -> list[dict]:

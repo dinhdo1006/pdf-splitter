@@ -184,6 +184,78 @@ def test_manifest_toc() -> None:
     print("  OK  manifest_toc")
 
 
+def test_toc_never_into_ly_lich() -> None:
+    det = BoundaryDetector()
+    det.process_page(
+        _sig(1, size="BOOKLET_SMALL", matched="LY_LICH_DANG_VIEN", header="LY LICH")
+    )
+    det.process_page(_sig(2, size="BOOKLET_SMALL", header="cont"))
+    # TOC on A4 after booklet
+    toc = _sig(3, size="A4_PORTRAIT", toc=True, header="MUC LUC TAI LIEU")
+    d = det.process_page(toc)
+    assert d.page_class == PageClass.ORPHAN_PAGE
+    groups, orphans = det.finalize()
+    assert 3 in orphans
+    # booklet closed before TOC — only pages 1-2 in ly lich
+    assert any(g.page_numbers == [1, 2] for g in groups)
+    print("  OK  toc_never_into_ly_lich")
+
+
+def test_booklet_to_a4_hard_boundary() -> None:
+    det = BoundaryDetector()
+    det.process_page(
+        _sig(1, size="BOOKLET_SMALL", matched="LY_LICH_DANG_VIEN", header="LY LICH")
+    )
+    det.process_page(_sig(2, size="BOOKLET_SMALL", header="p2"))
+    # A4 with phieu-like match should be NEW separate group
+    s3 = _sig(3, size="A4_PORTRAIT", matched="PHIEU_DANG_VIEN", header="MAU 2 HSDV")
+    d3 = det.process_page(s3)
+    assert d3.page_class == PageClass.NEW_DOCUMENT
+    groups, _ = det.finalize()
+    assert len(groups) == 2
+    assert groups[0].page_numbers == [1, 2]
+    assert groups[1].page_numbers == [3]
+    assert groups[1].doc_type == "PHIEU_DANG_VIEN"
+    print("  OK  booklet_to_a4_hard_boundary")
+
+
+def test_page_audit_complete() -> None:
+    from pipeline.page_audit import audit_page_coverage
+
+    g = DocumentGroup(
+        group_id=1,
+        raw_title="x",
+        doc_type="LY_LICH_DANG_VIEN",
+        page_numbers=[1, 2, 3],
+        page_size_group="BOOKLET_SMALL",
+    )
+    report = audit_page_coverage(5, [g], [4], [5])
+    assert report["complete"] is True
+    assert report["coverage_pct"] == 100.0
+    report2 = audit_page_coverage(5, [g], [], [])
+    assert report2["missing_pages"] == [4, 5]
+    print("  OK  page_audit_complete")
+
+
+def test_so_ly_lich_not_on_a4_phieu() -> None:
+    m = PartyDocMatcher()
+    r = m.match(
+        "MU 2 - HSDV\nSO LY LICH: 123",
+        "",
+        page_size_group="A4_PORTRAIT",
+    )
+    assert r.doc_type_key == "PHIEU_DANG_VIEN", r
+    print("  OK  so_ly_lich_not_on_a4_phieu")
+
+
+def test_bien_ban_not_kiem_diem() -> None:
+    m = PartyDocMatcher()
+    r = m.match("BIEN BAN CHI BO", "", page_size_group="OTHER")
+    assert r.source == "appendix"
+    assert r.doc_type_key == ""
+    print("  OK  bien_ban_not_kiem_diem")
+
+
 def test_prev_eod_boost() -> None:
     det = BoundaryDetector()
     det.process_page(
@@ -196,12 +268,9 @@ def test_prev_eod_boost() -> None:
             eod_conf=0.85,
         )
     )
-    # Next page without catalog — score should include prev_eod factor
     s2 = _sig(2, size="A4_PORTRAIT", header="GIAY GIOI THIEU SINH HOAT DANG")
-    # Give it a catalog match via matched for NEW certainty, check reasoning has eod when scoring
     score, reason = det._compute_score(s2)
     assert "prev_eod" in reason or score >= 0.0
-    # Force prev is set
     det._prev_signal = _sig(1, eod=True, eod_conf=0.9, size="A4_PORTRAIT")
     score2, reason2 = det._compute_score(
         _sig(2, size="A4_PORTRAIT", header="X")
@@ -225,6 +294,11 @@ def main() -> int:
         test_eod_signature_label,
         test_alias_size_gate,
         test_manifest_toc,
+        test_toc_never_into_ly_lich,
+        test_booklet_to_a4_hard_boundary,
+        test_page_audit_complete,
+        test_so_ly_lich_not_on_a4_phieu,
+        test_bien_ban_not_kiem_diem,
         test_prev_eod_boost,
     ]
     failed = 0

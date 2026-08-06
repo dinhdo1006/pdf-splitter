@@ -181,8 +181,15 @@ class ContinuationValidator:
             return ContinuationVerdict(False, "soft", "not_ly_lich_open", 0.0)
 
         if getattr(curr, "is_toc", False):
+            # Mục lục hồ sơ KHÔNG thuộc form lý lịch — không absorb
             return ContinuationVerdict(
-                True, "soft", "toc_inside_open_ly_lich", 0.88
+                False, "soft", "toc_never_absorb_into_ly_lich", 0.0
+            )
+        # Đổi khổ giấy booklet → A4: không soft-absorb
+        curr_sg = getattr(curr, "page_size_group", "OTHER") or "OTHER"
+        if curr_sg in {"A4_PORTRAIT", "A4_MEDIUM"}:
+            return ContinuationVerdict(
+                False, "soft", "a4_not_soft_absorb_into_ly_lich", 0.0
             )
         if getattr(curr, "is_form_section", False):
             return ContinuationVerdict(

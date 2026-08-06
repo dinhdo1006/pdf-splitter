@@ -116,6 +116,17 @@ def _judge_orphan(
     current_orphans: list[int],
 ) -> ReattachDecision:
     signal = all_signals.get(orphan_pn)
+
+    # TOC / mục lục: không bao giờ reattach vào group tài liệu
+    if signal is not None and getattr(signal, "is_toc", False):
+        return ReattachDecision(
+            orphan_page_num=orphan_pn,
+            action="keep_orphan",
+            target_group_id=None,
+            reason="toc_never_reattach",
+            confidence=1.0,
+        )
+
     prev_pn = orphan_pn - 1
     next_pn = orphan_pn + 1
     prev_group = page_to_group.get(prev_pn)

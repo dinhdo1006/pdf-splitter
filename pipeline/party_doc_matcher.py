@@ -73,7 +73,7 @@ _ALIASES: list[tuple[str, str]] = [
     ("ly lich xin vao dang", "LY_LICH_NGUOI_XIN_VAO_DANG"),
     ("ly lich dang vien", "LY_LICH_DANG_VIEN"),
     ("ho so ly lich", "LY_LICH_DANG_VIEN"),
-    ("so ly lich", "LY_LICH_DANG_VIEN"),
+    # "so ly lich" dễ dính field "Số lý lịch:" trên Phiếu ĐV → chuyển size-gated
     ("phieu bo sung ho so dang vien", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
     ("phieu bo sung thong tin dang vien", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
     ("phieu bo sung ho so", "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
@@ -85,16 +85,19 @@ _ALIASES: list[tuple[str, str]] = [
     ("phieu dang vien mau 2", "PHIEU_DANG_VIEN"),
     ("mau 2-hsdv", "PHIEU_DANG_VIEN"),
     ("mau 2 hsdv", "PHIEU_DANG_VIEN"),
+    ("mu 2-hsdv", "PHIEU_DANG_VIEN"),  # OCR méo MẪU→MU
+    ("mu 2 hsdv", "PHIEU_DANG_VIEN"),
+    ("mau 2 - hsdv", "PHIEU_DANG_VIEN"),
     ("phieu dang vien", "PHIEU_DANG_VIEN"),
-    ("ban kiem diem dang vien", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("ban tu kiem diem hang nam", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("tu kiem diem hang nam", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("kiem diem cuoi nam", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("tu kiem diem nam", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("ban tu danh gia", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("tu danh gia kiem diem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
-    ("kiem diem dang vien", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("ban tu kiem diem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    # KHÔNG dùng alias ngắn "kiem diem dang vien" / "ban kiem diem dang vien"
+    # — dễ dính OCR "BAN KIEM DIEM" từ biên bản / form khác
     ("giay gioi thieu sinh hoat dang tam thoi", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_TAM_THOI"),
     ("sinh hoat dang tam thoi", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_TAM_THOI"),
     ("giay gioi thieu tam thoi", "GIAY_GIOI_THIEU_SINH_HOAT_DANG_TAM_THOI"),
@@ -145,6 +148,7 @@ _ALIASES: list[tuple[str, str]] = [
 # Alias ngắn — CHỈ khi page_size_group phù hợp (tránh false NEW trên A4)
 _SIZE_GATED_ALIASES: list[tuple[str, str, frozenset[str]]] = [
     ("ly lich", "LY_LICH_DANG_VIEN", frozenset({"BOOKLET_SMALL", "LANDSCAPE_SMALL"})),
+    ("so ly lich", "LY_LICH_DANG_VIEN", frozenset({"BOOKLET_SMALL", "LANDSCAPE_SMALL"})),
 ]
 
 # Phụ lục không thuộc 104 — soft-attach, không tạo catalog key
@@ -318,11 +322,18 @@ class PartyDocMatcher:
             return MatchResult("", 0.0, "", "none")
 
         # Size-gated short aliases TRƯỚC noise filter (vd. "LY LICH" len=7)
-        for phrase, key, allowed_groups in self._size_gated:
-            if page_size_group not in allowed_groups:
-                continue
-            if phrase and phrase in header:
-                return MatchResult(key, 95.0, phrase, "alias")
+        # Không dùng khi header rõ là Phiếu / Mẫu HSDV
+        header_low = header.lower()
+        looks_like_phieu = any(
+            x in header_low
+            for x in ("phieu dang", "mau 2", "mu 2", "hsdv", "mau 3")
+        )
+        if not looks_like_phieu:
+            for phrase, key, allowed_groups in self._size_gated:
+                if page_size_group not in allowed_groups:
+                    continue
+                if phrase and phrase in header:
+                    return MatchResult(key, 95.0, phrase, "alias")
 
         if _is_noise_only(header):
             return MatchResult("", 0.0, "", "none")
@@ -344,19 +355,45 @@ class PartyDocMatcher:
         blob_low = unidecode(
             (header_text or "") + "\n" + (full_text or "")[:400]
         ).lower()
+
+        # Biên bản chi bộ ≠ bản tự kiểm điểm
+        if "bien ban" in blob_low and "tu kiem diem" not in blob_low:
+            if "chi bo" in blob_low or blob_low.strip().startswith("bien ban"):
+                logger.debug("[matcher] bien ban → appendix (not kiem diem)")
+                return MatchResult("", 0.0, "PHU_LUC_NGHI_QUYET", "appendix")
+
         for pat, kind in _APPENDIX_PATTERNS:
             if pat.search(blob_low):
                 logger.debug(f"[matcher] appendix detected: {kind}")
                 return MatchResult("", 0.0, kind, "appendix")
 
+        # Ưu tiên Phiếu ĐV khi có Mẫu 2 / HSDV (tránh SO LY LICH field)
+        if looks_like_phieu or any(
+            x in blob_low for x in ("mau 2", "mu 2", "mau 2-hsdv", "phieu dang vien")
+        ):
+            for phrase, key in self._aliases:
+                if key not in {
+                    "PHIEU_DANG_VIEN",
+                    "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+                    "PHIEU_DANG_VIEN_CU_LUU_LICH_SU",
+                }:
+                    continue
+                if phrase and phrase in header:
+                    return MatchResult(key, 100.0, phrase, "alias")
+
         # 1) Alias (chỉ substring đủ dài; fuzzy cao hơn)
         for phrase, key in self._aliases:
             if not phrase or len(phrase) < 10:
+                continue
+            # Chặn kiểm điểm khi header là biên bản
+            if key.startswith("BAN_TU_KIEM") and "bien ban" in blob_low:
                 continue
             if phrase in header:
                 return MatchResult(key, 100.0, phrase, "alias")
             score = fuzz.partial_ratio(phrase, header)
             if score >= max(self.fuzzy_threshold, 90):
+                if key.startswith("BAN_TU_KIEM") and "bien ban" in blob_low:
+                    continue
                 return MatchResult(key, float(score), phrase, "alias")
 
         # 2) Catalog — yêu cầu phrase dài + match mạnh trên HEADER (không full page)

@@ -390,12 +390,25 @@ def main() -> int:
         return 1
 
     groups, orphan_pages = detector.finalize()
+    blank_pages = list(getattr(detector, "blank_pages", []) or [])
     logger.info(
-        f"Detected {len(groups)} documents, {len(orphan_pages)} orphans "
-        f"across {process_pages} pages (before Pass-2)"
+        f"Detected {len(groups)} documents, {len(orphan_pages)} orphans, "
+        f"{len(blank_pages)} blanks across {process_pages} pages (before Pass-2)"
     )
 
-    # Pass 2 — orphan reattachment (attach_prev only)
+    # Scrub TOC pages that may have been swallowed into groups
+    try:
+        from pipeline.page_audit import scrub_toc_from_groups
+
+        groups, orphan_pages, scrubbed = scrub_toc_from_groups(
+            groups, all_signals, orphan_pages
+        )
+        if scrubbed:
+            logger.info(f"Scrubbed {len(scrubbed)} TOC pages from groups → orphans")
+    except Exception as sex:
+        logger.error(f"TOC scrub failed: {sex}")
+
+    # Pass 2 — orphan reattachment (attach_prev only; TOC never reattach)
     reattach_decisions: list = []
     try:
         from pipeline.orphan_reattacher import decisions_to_dicts, reattach_orphans
@@ -409,6 +422,27 @@ def main() -> int:
         )
     except Exception as rex:
         logger.error(f"Pass-2 reattach failed (giữ orphans gốc): {rex}")
+
+    # Audit đủ trang trước export
+    page_audit_report: dict = {}
+    try:
+        from pipeline.page_audit import audit_page_coverage
+
+        page_audit_report = audit_page_coverage(
+            process_pages, groups, orphan_pages, blank_pages
+        )
+        # Trang missing → đẩy vào orphan để không mất
+        for pn in page_audit_report.get("missing_pages") or []:
+            if pn not in orphan_pages:
+                orphan_pages.append(pn)
+                logger.warning(f"[audit] Recover missing page {pn} → orphan")
+        orphan_pages = sorted(set(orphan_pages))
+        if page_audit_report.get("missing_pages"):
+            page_audit_report = audit_page_coverage(
+                process_pages, groups, orphan_pages, blank_pages
+            )
+    except Exception as aex:
+        logger.error(f"Page audit failed: {aex}")
 
     from pipeline.year_aware_sequencer import YearAwareSequencer, DocRecord
 
@@ -512,12 +546,24 @@ def main() -> int:
         export_result.get("tentative", [])
     )
     total_docs = catalog_docs + len(export_result.get("review", []))
+    pages_exported = sum(
+        r.get("page_count", 0)
+        for r in (
+            export_result.get("success", [])
+            + export_result.get("tentative", [])
+            + export_result.get("review", [])
+        )
+    ) + len(export_result.get("orphans", []))
     manifest_extra["quality"] = {
         "pages_processed": process_pages,
+        "pages_exported": pages_exported,
+        "pages_blank": len(blank_pages),
         "orphan_rate_pct": orphan_rate,
         "catalog_doc_count": catalog_docs,
         "total_doc_groups": total_docs,
     }
+    if page_audit_report:
+        manifest_extra["page_audit"] = page_audit_report
 
     manifest_path = output_dir / "manifest.json"
     try:
