@@ -24,14 +24,6 @@ _DECISION_RE2 = re.compile(
     re.IGNORECASE,
 )
 
-# Loại thường 1 trang / phải tách khi đổi số hoặc năm
-SINGLE_PAGE_DOC_TYPES = frozenset(
-    {
-        "PHIEU_DANG_VIEN",
-    }
-)
-
-
 def _norm_ref(raw: str) -> str:
     s = unidecode(raw or "").upper()
     s = re.sub(r"\s+", "", s)
@@ -105,10 +97,6 @@ def should_force_new_document(
             curr_header, curr_full
         ):
             return True, "phieu_dv_to_phieu_bo_sung"
-        # Phiếu ĐV thường 1 trang — không gộp thêm cùng loại
-        if curr_t == "PHIEU_DANG_VIEN":
-            return True, "phieu_dang_vien_single_page"
-
     # Đang mở phiếu bổ sung + năm khác rõ
     if open_t == "PHIEU_BO_SUNG_HO_SO_DANG_VIEN" and curr_t == open_t:
         if (
@@ -125,8 +113,5 @@ def should_force_new_document(
         if open_page_count >= 1 and curr_t:
             # Mặc định 1 QĐ / 1 file khi trang sau cũng là QĐ catalog
             return True, "quyet_dinh_one_per_file"
-
-    if open_t in SINGLE_PAGE_DOC_TYPES and open_page_count >= 1 and curr_t == open_t:
-        return True, "single_page_doc_type"
 
     return False, ""

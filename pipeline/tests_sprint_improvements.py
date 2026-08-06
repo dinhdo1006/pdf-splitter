@@ -125,6 +125,30 @@ def test_reattach_sandwich() -> None:
     print("  OK  reattach_sandwich")
 
 
+def test_reattach_sandwich_not_into_quyet_dinh_minutes() -> None:
+    g = DocumentGroup(
+        group_id=1,
+        raw_title="QD",
+        doc_type="QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC",
+        page_numbers=[28, 30],
+        page_size_group="A4_MEDIUM",
+    )
+    signals = {
+        29: _sig(
+            29,
+            size="A4_MEDIUM",
+            score=0.15,
+            header="TRICH BIEN BAN HOP CHI BO",
+            full="xet chuyen dang chinh thuc cho dong chi ...",
+        )
+    }
+    groups, orphans, decisions = reattach_orphans([g], [29], signals)
+    assert groups[0].page_numbers == [28, 30]
+    assert orphans == [29]
+    assert decisions[0].reason == "minutes_between_quyet_dinh_keep_orphan"
+    print("  OK  reattach_sandwich_not_into_quyet_dinh_minutes")
+
+
 def test_reattach_case4_size() -> None:
     # prev không phải MULTI_PAGE_FORM → Case 2 không khớp; Case 4 size khớp
     g = DocumentGroup(
@@ -139,6 +163,30 @@ def test_reattach_case4_size() -> None:
     assert 5 in groups[0].page_numbers
     assert decisions[0].reason == "same_page_size_group_as_prev"
     print("  OK  reattach_case4_size")
+
+
+def test_reattach_trailing_phieu_dang_vien_page() -> None:
+    g = DocumentGroup(
+        group_id=1,
+        raw_title="PHIEU",
+        doc_type="PHIEU_DANG_VIEN",
+        page_numbers=[21],
+        page_size_group="A4_PORTRAIT",
+    )
+    signals = {
+        22: _sig(
+            22,
+            size="A4_PORTRAIT",
+            score=0.15,
+            header="22) TOM TAT QUA TRINH",
+            full="1985-1987 hoc tai truong ...",
+        )
+    }
+    groups, orphans, decisions = reattach_orphans([g], [22], signals)
+    assert 22 in groups[0].page_numbers
+    assert orphans == []
+    assert decisions[0].reason == "trailing_page_of_multi_page_form"
+    print("  OK  reattach_trailing_phieu_dang_vien_page")
 
 
 def test_eod_signature_label() -> None:
@@ -270,6 +318,17 @@ def test_force_phieu_and_quyet_dinh_split() -> None:
     )
     assert force and "bo_sung" in reason
 
+    force_same, _ = should_force_new_document(
+        "PHIEU_DANG_VIEN",
+        None,
+        None,
+        1,
+        "PHIEU_DANG_VIEN",
+        "TOM TAT QUA TRINH CONG TAC",
+        "",
+    )
+    assert force_same is False
+
     force2, reason2 = should_force_new_document(
         "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC",
         1995,
@@ -330,7 +389,9 @@ def main() -> int:
         test_soft_booklet_continuation,
         test_size_change_is_new,
         test_reattach_sandwich,
+        test_reattach_sandwich_not_into_quyet_dinh_minutes,
         test_reattach_case4_size,
+        test_reattach_trailing_phieu_dang_vien_page,
         test_eod_signature_label,
         test_alias_size_gate,
         test_manifest_toc,
