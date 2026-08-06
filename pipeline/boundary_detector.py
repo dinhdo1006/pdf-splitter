@@ -22,6 +22,11 @@ from unidecode import unidecode
 
 import config
 from pipeline.continuation_validator import ContinuationValidator, MULTI_PAGE_FORM_TYPES
+from pipeline.doc_identity import (
+    extract_decision_ref,
+    looks_like_phieu_bo_sung,
+    should_force_new_document,
+)
 from pipeline.signal_extractor import PageSignal
 from pipeline.year_aware_sequencer import extract_year_robust
 
@@ -68,6 +73,7 @@ class DocumentGroup:
     doc_year: Optional[int] = None
     page_numbers: list[int] = field(default_factory=list)
     page_size_group: str = "OTHER"
+    doc_ref: Optional[str] = None  # số QĐ / mã văn bản
     _sequence_number: int = field(default=0, repr=False, compare=False)
     _reattach_confidence: float = field(default=1.0, repr=False, compare=False)
     _is_tentative: bool = field(default=False, repr=False, compare=False)
@@ -218,19 +224,28 @@ class BoundaryDetector:
             if hint:
                 doc_type = hint
 
+        # Phiếu bổ sung ưu tiên hơn nếu header rõ
+        if looks_like_phieu_bo_sung(signal.header_text, signal.full_text):
+            doc_type = "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
+
+        blob = (signal.header_text or "") + "\n" + (signal.full_text or "")[:500]
+        doc_ref = extract_decision_ref(blob)
+        doc_year = extract_year_robust(blob)
+
         self._group_counter += 1
         self._current_group = DocumentGroup(
             group_id=self._group_counter,
             raw_title=_clean_header(signal.header_text),
             doc_type=doc_type,
-            doc_year=None,
+            doc_year=doc_year,
             page_numbers=[signal.page_num],
             page_size_group=signal.page_size_group or "OTHER",
+            doc_ref=doc_ref,
         )
         logger.info(
             f"NEW_DOCUMENT #{self._group_counter} at page {signal.page_num} "
             f"(score={score:.2f}, doc_type={doc_type!r}, "
-            f"size={signal.page_size_group}) | {reason}"
+            f"size={signal.page_size_group}, ref={doc_ref!r}) | {reason}"
         )
 
     def _append_continuation(self, signal: PageSignal, reason: str) -> bool:
@@ -420,6 +435,30 @@ class BoundaryDetector:
         # 2) NEW: catalog hit hoặc high heuristic score
         is_new = bool(signal.matched_doc_type) or score >= self.high_threshold
 
+        # Override: phiếu bổ sung khi đang mở / vừa match phiếu ĐV
+        effective_type = signal.matched_doc_type or ""
+        if looks_like_phieu_bo_sung(signal.header_text, signal.full_text):
+            effective_type = "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
+            signal.matched_doc_type = effective_type
+            signal.has_doc_keyword = True
+            is_new = True
+            score_reason += "; +force_phieu_bo_sung"
+
+        # Force NEW: phiếu ĐV ↔ bổ sung, QĐ đổi số, single-page types
+        if self._current_group is not None and (effective_type or signal.matched_doc_type):
+            force, force_reason = should_force_new_document(
+                self._current_group.doc_type,
+                self._current_group.doc_year,
+                self._current_group.doc_ref,
+                len(self._current_group.page_numbers),
+                effective_type or signal.matched_doc_type,
+                signal.header_text,
+                signal.full_text or "",
+            )
+            if force:
+                is_new = True
+                score_reason += f"; +force_new[{force_reason}]"
+
         # Form nhiều trang: tiêu đề catalog lặp lại trên trang tiếp → không NEW
         # Ngoại lệ: đổi page_size_group (vd. landscape sơ yếu → booklet lý lịch)
         if (
@@ -428,6 +467,7 @@ class BoundaryDetector:
             and signal.matched_doc_type
             and signal.matched_doc_type == self._current_group.doc_type
             and signal.matched_doc_type in MULTI_PAGE_FORM_TYPES
+            and "+force_new" not in score_reason
         ):
             size_changed = (
                 signal.page_size_group != "OTHER"
@@ -463,6 +503,7 @@ class BoundaryDetector:
             is_new
             and not signal.matched_doc_type
             and self._soft_size_continuation(signal)
+            and "+force_new" not in score_reason
         ):
             is_new = False
             score_reason += "; -soft_size_block_heuristic_new"
@@ -474,12 +515,6 @@ class BoundaryDetector:
 
         if is_new:
             self._open_new_group(signal, score, score_reason)
-            if self._current_group and self._current_group.doc_year is None:
-                y = extract_year_robust(
-                    signal.header_text + "\n" + (signal.full_text or "")[:300]
-                )
-                if y is not None:
-                    self._current_group.doc_year = y
             page_class = PageClass.NEW_DOCUMENT
             reasoning = f"new | {score_reason}"
         elif "repeated_catalog_header_same_type" in score_reason:

@@ -256,6 +256,46 @@ def test_bien_ban_not_kiem_diem() -> None:
     print("  OK  bien_ban_not_kiem_diem")
 
 
+def test_force_phieu_and_quyet_dinh_split() -> None:
+    from pipeline.doc_identity import should_force_new_document
+
+    force, reason = should_force_new_document(
+        "PHIEU_DANG_VIEN",
+        None,
+        None,
+        1,
+        "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        "PHIEU BO SUNG HO SO",
+        "",
+    )
+    assert force and "bo_sung" in reason
+
+    force2, reason2 = should_force_new_document(
+        "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC",
+        1995,
+        "05/QN-DB",
+        1,
+        "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC",
+        "SO: 12/QN-DB",
+        "Quyet dinh so 12/QN-DB",
+    )
+    assert force2
+    print("  OK  force_phieu_and_quyet_dinh_split")
+
+
+def test_manifest_without_co_khong() -> None:
+    text = (
+        "MUC LUC TAI LIEU TRONG HO SO DANG VIEN\n"
+        "01. Ly lich dang vien\n"
+        "03. Phieu dang vien\n"
+        "04. Phieu bo sung ho so dang vien\n"
+    )
+    m = extract_manifest(20, text, "MUC LUC TAI LIEU")
+    assert m is not None
+    assert len(m.entries) >= 2, m.entries
+    print("  OK  manifest_without_co_khong")
+
+
 def test_prev_eod_boost() -> None:
     det = BoundaryDetector()
     det.process_page(
@@ -299,6 +339,8 @@ def main() -> int:
         test_page_audit_complete,
         test_so_ly_lich_not_on_a4_phieu,
         test_bien_ban_not_kiem_diem,
+        test_force_phieu_and_quyet_dinh_split,
+        test_manifest_without_co_khong,
         test_prev_eod_boost,
     ]
     failed = 0

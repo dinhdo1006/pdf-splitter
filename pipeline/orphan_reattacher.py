@@ -150,11 +150,25 @@ def _judge_orphan(
     if (
         prev_group is not None
         and (prev_group.doc_type or "").upper() in MULTI_PAGE_FORM_TYPES
+        and (prev_group.doc_type or "").upper() != "PHIEU_DANG_VIEN"
         and signal is not None
         and not signal.matched_doc_type
         and not getattr(signal, "is_toc", False)
         and float(getattr(signal, "boundary_score", 0.0) or 0.0) < 0.40
     ):
+        # Không gắn vào phiếu ĐV — thường 1 trang
+        from pipeline.doc_identity import looks_like_phieu_bo_sung
+
+        if looks_like_phieu_bo_sung(
+            getattr(signal, "header_text", ""), getattr(signal, "full_text", "") or ""
+        ):
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="looks_like_phieu_bo_sung_keep_for_new_doc",
+                confidence=1.0,
+            )
         return ReattachDecision(
             orphan_page_num=orphan_pn,
             action="attach_prev",
@@ -172,10 +186,23 @@ def _judge_orphan(
     if (
         chain_prev_group is not None
         and (chain_prev_group.doc_type or "").upper() in MULTI_PAGE_FORM_TYPES
+        and (chain_prev_group.doc_type or "").upper() != "PHIEU_DANG_VIEN"
         and signal is not None
         and not signal.matched_doc_type
         and float(getattr(signal, "boundary_score", 0.0) or 0.0) < 0.35
     ):
+        from pipeline.doc_identity import looks_like_phieu_bo_sung
+
+        if looks_like_phieu_bo_sung(
+            getattr(signal, "header_text", ""), getattr(signal, "full_text", "") or ""
+        ):
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="looks_like_phieu_bo_sung_keep_for_new_doc",
+                confidence=1.0,
+            )
         return ReattachDecision(
             orphan_page_num=orphan_pn,
             action="attach_chain_prev",

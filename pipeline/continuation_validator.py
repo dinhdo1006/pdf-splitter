@@ -26,12 +26,12 @@ from pipeline.signal_extractor import PageSignal
 
 
 # Loại form thường nhiều trang — cho phép soft layout continuation
+# PHIEU_DANG_VIEN: thường 1 trang — không để soft-merge nuốt phiếu bổ sung
 MULTI_PAGE_FORM_TYPES = frozenset(
     {
         "LY_LICH_DANG_VIEN",
         "LY_LICH_NGUOI_XIN_VAO_DANG",
         "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
-        "PHIEU_DANG_VIEN",
         "BAN_TU_KIEM_DIEM_HANG_NAM",
         "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI",
         "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON",

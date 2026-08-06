@@ -37,6 +37,11 @@ class HoSoManifest:
     extraction_confidence: float = 0.0
 
 
+_STT_LINE_RE = re.compile(
+    r"^\s*(\d{1,3})[\.\)\-:]\s*(.+)$"
+)
+
+
 def extract_manifest(
     page_num: int,
     ocr_text: str,
@@ -57,20 +62,19 @@ def extract_manifest(
         if name_match:
             manifest.party_member_name = name_match.group(1).strip().title()
 
+        seen_keys: set[str] = set()
         lines = [ln.strip() for ln in (ocr_text or "").splitlines() if ln.strip()]
         for line in lines:
-            if len(line) < 10:
+            if len(line) < 8:
                 continue
-            is_present = bool(re.search(r"\bC[oó]\b", line, re.IGNORECASE))
-            is_absent = bool(re.search(r"\bKh[oô]ng\b", line, re.IGNORECASE))
-            # ASCII OCR fallback
+
             line_ascii = unidecode(line)
-            if not is_present:
-                is_present = bool(re.search(r"\bCo\b", line_ascii, re.IGNORECASE))
-            if not is_absent:
-                is_absent = bool(re.search(r"\bKhong\b", line_ascii, re.IGNORECASE))
-            if not (is_present or is_absent):
-                continue
+            is_present = bool(re.search(r"\bC[oó]\b", line, re.IGNORECASE)) or bool(
+                re.search(r"\bCo\b", line_ascii, re.IGNORECASE)
+            )
+            is_absent = bool(re.search(r"\bKh[oô]ng\b", line, re.IGNORECASE)) or bool(
+                re.search(r"\bKhong\b", line_ascii, re.IGNORECASE)
+            )
 
             clean_line = re.sub(
                 r"\b(C[oó]|Kh[oô]ng|Co|Khong)\b",
@@ -78,22 +82,75 @@ def extract_manifest(
                 line,
                 flags=re.IGNORECASE,
             ).strip()
+            # Bỏ STT đầu dòng "01. Ly lich..."
+            m_stt = _STT_LINE_RE.match(unidecode(clean_line))
+            if m_stt:
+                clean_line = m_stt.group(2).strip()
+
+            # Bỏ qua header bảng
+            low = unidecode(clean_line).lower()
+            if any(
+                h in low
+                for h in (
+                    "ten tai lieu",
+                    "muc luc",
+                    "ly do khong",
+                    "so thu tu",
+                    "ghi chu",
+                )
+            ):
+                continue
+
             best_key, best_score = _fuzzy_match_catalog(clean_line)
-            if best_score >= 60 and best_key:
-                stt = PARTY_DOC_CATALOG[best_key][0]
+
+            # Có/Không rõ → lấy; không có thì vẫn lấy nếu match catalog mạnh (OCR mất cột)
+            if is_present or is_absent:
+                if best_score >= 55 and best_key and best_key not in seen_keys:
+                    seen_keys.add(best_key)
+                    manifest.entries.append(
+                        ManifestEntry(
+                            raw_text=line,
+                            normalized_text=clean_line,
+                            catalog_key=best_key,
+                            catalog_stt=PARTY_DOC_CATALOG[best_key][0],
+                            is_present=is_present,
+                        )
+                    )
+            elif best_score >= 72 and best_key and best_key not in seen_keys:
+                seen_keys.add(best_key)
                 manifest.entries.append(
                     ManifestEntry(
                         raw_text=line,
                         normalized_text=clean_line,
                         catalog_key=best_key,
-                        catalog_stt=stt,
-                        is_present=is_present,
+                        catalog_stt=PARTY_DOC_CATALOG[best_key][0],
+                        is_present=True,  # optimistic khi OCR mất cột Có/Không
                     )
                 )
 
-        manifest.extraction_confidence = min(1.0, len(manifest.entries) / 10.0)
+        # Fallback: fuzzy toàn trang với từng tên catalog (khi OCR dính dòng)
+        if len(manifest.entries) < 3:
+            blob = unidecode(ocr_text or "").lower()
+            for key, (stt, ten, _prio) in PARTY_DOC_CATALOG.items():
+                if key in seen_keys:
+                    continue
+                ten_n = unidecode(ten).lower()
+                if len(ten_n) < 14:
+                    continue
+                if ten_n in blob or fuzz.partial_ratio(ten_n, blob) >= 90:
+                    seen_keys.add(key)
+                    manifest.entries.append(
+                        ManifestEntry(
+                            raw_text=ten,
+                            normalized_text=ten,
+                            catalog_key=key,
+                            catalog_stt=stt,
+                            is_present=True,
+                        )
+                    )
+
+        manifest.extraction_confidence = min(1.0, len(manifest.entries) / 8.0)
         if manifest.extraction_confidence < 0.3 and not manifest.entries:
-            # Vẫn trả về để biết đã thấy TOC (dùng source_page)
             manifest.extraction_confidence = 0.35
         logger.info(
             f"[manifest] page {page_num}: {len(manifest.entries)} entries, "
