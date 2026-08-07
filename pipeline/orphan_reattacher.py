@@ -185,6 +185,21 @@ def _judge_orphan(
     ):
         from pipeline.doc_identity import looks_like_phieu_bo_sung
 
+        open_t = (prev_group.doc_type or "").upper()
+        max_soft = {
+            "PHIEU_DANG_VIEN": 4,
+            "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 6,
+            "BAN_TU_KIEM_DIEM_HANG_NAM": 8,
+            "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI": 8,
+        }.get(open_t)
+        if max_soft is not None and len(prev_group.page_numbers) >= max_soft:
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason=f"prev_group_at_max_pages({max_soft})",
+                confidence=1.0,
+            )
         if looks_like_phieu_bo_sung(
             getattr(signal, "header_text", ""), getattr(signal, "full_text", "") or ""
         ):

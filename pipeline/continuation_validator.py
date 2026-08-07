@@ -134,6 +134,22 @@ class ContinuationValidator:
                 False, "none", "quyet_dinh_no_soft_continuation", 0.0
             )
 
+        # Không soft-cont biên bản / QĐ / nghị quyết vào phiếu ĐV
+        if has_open_group and open_key == "PHIEU_DANG_VIEN":
+            from pipeline.doc_identity import (
+                looks_like_quyet_dinh_or_nghi_quyet,
+                looks_like_standalone_minutes,
+            )
+
+            if looks_like_standalone_minutes(
+                curr.header_text, curr.full_text or ""
+            ) or looks_like_quyet_dinh_or_nghi_quyet(
+                curr.header_text, curr.full_text or ""
+            ):
+                return ContinuationVerdict(
+                    False, "none", "phieu_dv_blocks_minutes_or_qd", 0.0
+                )
+
         # Soft: mục lục / mục form / hướng dẫn LL khi đang mở lý lịch
         soft = self._soft_ly_lich_absorb(curr, has_open_group, open_doc_type)
         if soft.is_continuation:

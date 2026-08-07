@@ -103,6 +103,17 @@ _ALIASES: list[tuple[str, str]] = [
     ("nghi quyet gioi thieu doan vien", "NGHI_QUYET_GIOI_THIEU_DOAN_VIEN_UU_TU"),
     ("nghi quyet de nghi ket nap", "NGHI_QUYET_DE_NGHI_KET_NAP_CUA_CHI_BO"),
     ("nghi quyet cong nhan chinh thuc", "NGHI_QUYET_CONG_NHAN_CHINH_THUC_CHI_BO"),
+    # Nghị quyết / chuẩn y công nhận ≈ QĐ công nhận (STT 07) trên hồ sơ thực tế
+    ("nghi quyet cong nhan dang vien", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
+    ("chuan y cong nhan dang vien", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
+    ("chuan y cong nhan chinh thuc", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
+    ("ve viec chuan y cong nhan", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
+    ("ve viec cong nhan dang vien chinh thuc", "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC"),
+    ("- qd/tu", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    (" qd/tu", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    ("-qd/tu", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    ("qd/tu", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    ("qd-tu", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
     # Văn bằng / chứng chỉ
     ("chung chi ly luan chinh tri", "BANG_CHUNG_CHI_LY_LUAN_CHINH_TRI"),
     ("bang ly luan chinh tri", "BANG_CHUNG_CHI_LY_LUAN_CHINH_TRI"),
@@ -403,6 +414,19 @@ class PartyDocMatcher:
                     continue
                 if phrase and phrase in header:
                     return MatchResult(key, 100.0, phrase, "alias")
+
+        # QĐ dạng "6294 - QD/TU" / "123/QD-TU" (alias ngắn bị filter len<10)
+        if re.search(
+            r"\b\d{1,6}\s*[-–/]?\s*QD\s*[-–/]?\s*T[UƯ]\b",
+            header,
+            re.IGNORECASE,
+        ):
+            return MatchResult(
+                "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM",
+                96.0,
+                "QD/TU",
+                "alias",
+            )
 
         # 1) Alias (chỉ substring đủ dài; fuzzy cao hơn)
         for phrase, key in self._aliases:

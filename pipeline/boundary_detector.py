@@ -26,6 +26,8 @@ from pipeline.doc_identity import (
     extract_decision_ref,
     is_quyet_dinh_type,
     looks_like_phieu_bo_sung,
+    looks_like_phieu_dang_vien,
+    looks_like_quyet_dinh_or_nghi_quyet,
     looks_like_standalone_minutes,
     should_force_new_document,
 )
@@ -253,6 +255,22 @@ class BoundaryDetector:
     def _append_continuation(self, signal: PageSignal, reason: str) -> bool:
         if self._current_group is None:
             return False
+        open_t = (self._current_group.doc_type or "").upper()
+        # Chặn soft-nuốt quá dài (phiếu / kiểm điểm)
+        max_soft = {
+            "PHIEU_DANG_VIEN": 4,
+            "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 6,
+            "BAN_TU_KIEM_DIEM_HANG_NAM": 8,
+            "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI": 8,
+        }.get(open_t)
+        if max_soft is not None and len(self._current_group.page_numbers) >= max_soft:
+            logger.info(
+                f"Page {signal.page_num}: soft-cont blocked — "
+                f"{open_t} already {len(self._current_group.page_numbers)} pages "
+                f"(max={max_soft})"
+            )
+            self._close_current_group(f"max_pages_{open_t}({max_soft})")
+            return False
         self._current_group.page_numbers.append(signal.page_num)
         logger.debug(
             f"Page {signal.page_num}: CONFIRMED_CONTINUATION → "
@@ -264,17 +282,37 @@ class BoundaryDetector:
         """
         Cách ly trang mồ côi.
         Lý lịch nhiều trang: giữ group mở để trang sau còn continuation.
-        Quyết định: đóng group ngay — tránh trang biên bản sau bị soft-cont vào QĐ.
+        Quyết định: luôn đóng. Phiếu ĐV: chỉ đóng khi orphan là TOC/biên bản/appendix
+        (không đóng vì soft-cont fail giữa các trang phiếu).
         """
         self._orphan_pages.append(signal.page_num)
         open_id = self._current_group.group_id if self._current_group else None
         logger.warning(
             f"Page {signal.page_num}: ORPHAN_PAGE (group #{open_id} vẫn mở) — {reason}"
         )
-        if self._current_group is not None and is_quyet_dinh_type(
-            self._current_group.doc_type
-        ):
+        if self._current_group is None:
+            return
+        open_t = (self._current_group.doc_type or "").upper()
+        if is_quyet_dinh_type(open_t):
             self._close_current_group("orphan_closes_quyet_dinh")
+            return
+        if open_t == "PHIEU_DANG_VIEN":
+            r = (reason or "").lower()
+            if any(
+                x in r
+                for x in (
+                    "toc",
+                    "minutes",
+                    "appendix",
+                    "bien_ban",
+                    "quyet_dinh",
+                    "nghi_quyet",
+                )
+            ):
+                self._close_current_group("orphan_closes_phieu_dang_vien")
+            return
+        if open_t.startswith("NGHI_QUYET"):
+            self._close_current_group("orphan_closes_decision_like")
 
     def _close_current_group(self, reason: str) -> None:
         """Đóng group đang mở (giữ orphan list / không tạo orphan)."""
@@ -391,25 +429,49 @@ class BoundaryDetector:
                     self._prev_was_blank = False
                     return decision
 
-        # Đang mở QĐ + trang hiện tại giống biên bản → orphan (không soft-cont)
+        # Đang mở QĐ / phiếu ĐV + trang hiện tại giống biên bản → orphan
         if (
             self._current_group is not None
-            and is_quyet_dinh_type(open_doc)
+            and (
+                is_quyet_dinh_type(open_doc)
+                or open_doc == "PHIEU_DANG_VIEN"
+            )
             and looks_like_standalone_minutes(signal.header_text, signal.full_text or "")
             and not (signal.matched_doc_type or "").upper().startswith("QUYET_DINH")
         ):
-            self._close_current_group("minutes_after_quyet_dinh")
-            self._mark_orphan(signal, "minutes_after_quyet_dinh")
+            close_why = (
+                "minutes_after_quyet_dinh"
+                if is_quyet_dinh_type(open_doc)
+                else "minutes_after_phieu_dang_vien"
+            )
+            self._close_current_group(close_why)
+            self._mark_orphan(signal, close_why)
             decision = BoundaryDecision(
                 page_num=signal.page_num,
                 page_class=PageClass.ORPHAN_PAGE,
                 score=score,
                 confidence=confidence,
-                reasoning=f"orphan[minutes_after_qd] | {score_reason}",
+                reasoning=f"orphan[minutes_after_open] | {score_reason}",
             )
             self._prev_signal = signal
             self._prev_was_blank = False
             return decision
+
+        # Đang mở phiếu ĐV + trang giống QĐ/nghị quyết → NEW catalog nếu match, else orphan
+        if (
+            self._current_group is not None
+            and open_doc == "PHIEU_DANG_VIEN"
+            and looks_like_quyet_dinh_or_nghi_quyet(
+                signal.header_text, signal.full_text or ""
+            )
+            and not looks_like_phieu_dang_vien(
+                signal.header_text, signal.full_text or ""
+            )
+        ):
+            self._close_current_group("quyet_dinh_after_phieu_dang_vien")
+            # Để nhánh is_new phía dưới mở group QĐ nếu matcher đã gắn type
+            if not signal.matched_doc_type:
+                score_reason += "; +force_after_phieu_close"
 
         # TOC: LUÔN orphan — không bao giờ gộp vào lý lịch / soft size
         if getattr(signal, "is_toc", False):

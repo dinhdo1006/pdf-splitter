@@ -39,17 +39,17 @@ class MemberIdentity:
 _NAME_PATTERNS: list[re.Pattern[str]] = [
     re.compile(
         r"(?:ho\s*(?:va\s*)?ten\s*(?:khai\s*sinh)?|ho\s*ten)\s*[:\.]?\s*"
-        r"([A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹ\s]{4,50})",
+        r"([A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹĐđ\s]{4,40})",
         re.IGNORECASE,
     ),
     re.compile(
         r"(?:cua\s+)?dong\s*chi\s*[:\.]?\s*"
-        r"([A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹ\s]{4,50})",
+        r"([A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹĐđ\s]{4,40})",
         re.IGNORECASE,
     ),
     re.compile(
         r"ho\s*so\s*dang\s*vien\s*(?:cua\s*)?(?:dong\s*chi\s*)?[:\.]?\s*"
-        r"([A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹ\s]{4,50})",
+        r"([A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹĐđ\s]{4,40})",
         re.IGNORECASE,
     ),
 ]
@@ -59,7 +59,20 @@ _CCCD_LABELED = re.compile(
     r"giay\s*cmnd|so\s*cmnd)\s*[:\.]?\s*([0-9OIl]{8,14})",
     re.IGNORECASE,
 )
-_CCCD_BARE = re.compile(r"\b([0-9]{9}|[0-9]{12})\b")
+# Chỉ dùng bare 12 số (CCCD mới). Không lấy bare 9 số — dễ nhầm số TĐV.
+_CCCD_BARE_12 = re.compile(r"\b([0-9]{12})\b")
+
+# Số thẻ đảng viên / TĐV — không được coi là CCCD
+_TDV_NEAR = re.compile(
+    r"(?:so\s*)?(?:tdv|the\s*dang(?:\s*vien)?|so\s*the)\s*[:\.]?\s*"
+    r"[0-9OIl]{6,14}",
+    re.IGNORECASE,
+)
+_TDV_DIGITS = re.compile(
+    r"(?:so\s*)?(?:tdv|the\s*dang(?:\s*vien)?|so\s*the)\s*[:\.]?\s*"
+    r"([0-9OIl]{6,14})",
+    re.IGNORECASE,
+)
 
 # Mã cấp ủy dạng 93.015.000.001.002 hoặc 93.000.036.001.015
 _M_CODES_RE = re.compile(
@@ -81,8 +94,15 @@ _NOISE_NAME = frozenset(
         "tai lieu",
         "khong",
         "co",
+        "thanh",
+        "uy",
+        "chi",
+        "bo",
     }
 )
+
+# Nguyên âm ASCII — tên người Việt OCR sạch phải có mật độ nguyên âm hợp lý
+_VOWELS = set("aeiouyAEIOUY")
 
 
 def _ocr_digit_fixup(raw: str) -> str:
@@ -95,14 +115,41 @@ def _ocr_digit_fixup(raw: str) -> str:
     )
 
 
+def _name_quality_ok(name: str) -> bool:
+    """Loại tên OCR rác kiểu 'Lacain Ahang T'."""
+    ascii_n = unidecode(name or "")
+    parts = [p for p in ascii_n.split() if p]
+    if len(parts) < 2 or len(parts) > 5:
+        return False
+    # Họ tên VN: mỗi tiếng ≥ 2 ký tự chữ (không chấp nhận chữ cái đơn)
+    for p in parts:
+        letters_only = re.sub(r"[^A-Za-z]", "", p)
+        if len(letters_only) < 2:
+            return False
+    letters = [c for c in ascii_n if c.isalpha()]
+    if len(letters) < 6:
+        return False
+    vowel_n = sum(1 for c in letters if c in _VOWELS)
+    ratio = vowel_n / max(1, len(letters))
+    if ratio < 0.28 or ratio > 0.72:
+        return False
+    # Quá nhiều phụ âm liên tiếp → OCR méo
+    if re.search(r"[bcdfghjklmnpqrstvwxz]{5,}", ascii_n.lower()):
+        return False
+    return True
+
+
 def _clean_person_name(raw: str) -> Optional[str]:
     if not raw:
         return None
+    # Cắt tại xuống dòng / nhãn số giấy tờ
+    raw = re.split(r"[\n\r]+", raw, maxsplit=1)[0]
     name = re.sub(r"[\d:;|/\\]+", " ", raw)
     name = re.sub(r"\s+", " ", name).strip(" .-_,")
     # Cắt phần sau nhãn phụ
     name = re.split(
-        r"\b(nam|nu|sinh|ngay|que|quan|thuong|tru|dan|toc)\b",
+        r"\b(nam|nu|sinh|ngay|que|quan|thuong|tru|dan|toc|so\s*cccd|so\s*cmnd|"
+        r"cccd|cmnd|so\s*tdv|the\s*dang)\b",
         name,
         maxsplit=1,
         flags=re.IGNORECASE,
@@ -116,6 +163,8 @@ def _clean_person_name(raw: str) -> Optional[str]:
     # Title-case từng từ (giữ dấu)
     cleaned = " ".join(p[:1].upper() + p[1:].lower() for p in parts)
     if len(cleaned) < 5:
+        return None
+    if not _name_quality_ok(cleaned):
         return None
     return cleaned
 
@@ -131,24 +180,48 @@ def _extract_name_from_blob(blob: str) -> Optional[str]:
     return None
 
 
+def _tdv_digit_set(ascii_blob: str) -> set[str]:
+    out: set[str] = set()
+    for m in _TDV_DIGITS.finditer(ascii_blob):
+        d = re.sub(r"\D", "", _ocr_digit_fixup(m.group(1)))
+        if d:
+            out.add(d)
+            # Prefix ngắn cũng loại (OCR cắt/thêm số)
+            if len(d) >= 7:
+                out.add(d[:7])
+                out.add(d[:8])
+                out.add(d[:9])
+    return out
+
+
 def _extract_cccd_from_blob(blob: str) -> Optional[str]:
     ascii_blob = unidecode(blob)
+    tdv_nums = _tdv_digit_set(ascii_blob)
+
     m = _CCCD_LABELED.search(ascii_blob)
     if m:
         digits = re.sub(r"\D", "", _ocr_digit_fixup(m.group(1)))
         if len(digits) in (9, 12):
-            return digits
-    # Ưu tiên 12 số; tránh năm 19xx/20xx
-    candidates = []
-    for m in _CCCD_BARE.finditer(re.sub(r"\s+", "", ascii_blob)):
+            # Nhãn CCCD nhưng số trùng TĐV gần đó → bỏ
+            if digits not in tdv_nums and not any(
+                digits.startswith(t) or t.startswith(digits) for t in tdv_nums if len(t) >= 7
+            ):
+                return digits
+
+    # Bare: chỉ 12 số, và không nằm cạnh nhãn TĐV / không trùng số TĐV
+    compact = re.sub(r"\s+", "", ascii_blob)
+    # Nếu blob có nhãn TĐV rõ → không dùng bare CCCD (tránh nhầm)
+    if _TDV_NEAR.search(ascii_blob):
+        return None
+
+    for m in _CCCD_BARE_12.finditer(compact):
         d = m.group(1)
-        if d.startswith(("19", "20")) and len(d) == 4:
+        if d.startswith(("19", "20")):
             continue
-        if len(d) == 12:
-            candidates.insert(0, d)
-        elif len(d) == 9:
-            candidates.append(d)
-    return candidates[0] if candidates else None
+        if any(d.startswith(t) or t.startswith(d[:9]) for t in tdv_nums if len(t) >= 7):
+            continue
+        return d
+    return None
 
 
 def _extract_m_codes(blob: str) -> Optional[tuple[str, str, str, str, str]]:

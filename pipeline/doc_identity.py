@@ -104,6 +104,38 @@ def looks_like_standalone_minutes(header: str, full_text: str = "") -> bool:
     return any(a in blob and b in blob for a, b in soft_pair)
 
 
+def looks_like_quyet_dinh_or_nghi_quyet(header: str, full_text: str = "") -> bool:
+    """Quyết định / nghị quyết công nhận — không thuộc phiếu ĐV."""
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:500]).lower()
+    hints = (
+        "quyet dinh",
+        "nghi quyet",
+        "chuan y cong nhan",
+        "cong nhan dang vien chinh thuc",
+        "cong nhan chinh thuc",
+        "ve viec chuan y",
+        "qd/tu",
+        "qd-tu",
+        "qn/db",
+        "qn-db",
+    )
+    return any(h in blob for h in hints)
+
+
+def looks_like_kiem_diem_header(header: str, full_text: str = "") -> bool:
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:350]).lower()
+    return any(
+        x in blob
+        for x in (
+            "ban tu kiem diem",
+            "tu kiem diem hang nam",
+            "kiem diem cuoi nam",
+            "tu danh gia kiem diem",
+            "ban tu danh gia",
+        )
+    )
+
+
 def should_force_new_document(
     open_doc_type: str | None,
     open_year: int | None,
@@ -128,14 +160,48 @@ def should_force_new_document(
             curr_header, curr_full
         ):
             return True, "phieu_dv_to_phieu_bo_sung"
-    # Đang mở phiếu bổ sung + năm khác rõ
-    if open_t == "PHIEU_BO_SUNG_HO_SO_DANG_VIEN" and curr_t == open_t:
-        if (
-            open_year is not None
-            and blob_year is not None
-            and open_year != blob_year
+        if looks_like_standalone_minutes(curr_header, curr_full):
+            return True, "phieu_dv_to_minutes"
+        if looks_like_quyet_dinh_or_nghi_quyet(curr_header, curr_full):
+            return True, "phieu_dv_to_quyet_dinh"
+        # Phiếu ĐV thường 2–4 trang; quá dài + header catalog mới → tách
+        if open_page_count >= 4 and (
+            looks_like_phieu_dang_vien(curr_header, curr_full) or curr_t == open_t
         ):
-            return True, f"phieu_bo_sung_new_year({blob_year})"
+            return True, "phieu_dv_max_pages"
+
+    # Đang mở phiếu bổ sung + năm khác rõ, hoặc header form mới sau khi đã dài
+    if open_t == "PHIEU_BO_SUNG_HO_SO_DANG_VIEN":
+        if curr_t == open_t or looks_like_phieu_bo_sung(curr_header, curr_full):
+            if (
+                open_year is not None
+                and blob_year is not None
+                and open_year != blob_year
+            ):
+                return True, f"phieu_bo_sung_new_year({blob_year})"
+            # Sau ≥5 trang mà lại thấy tiêu đề Mẫu 3 / Phiếu bổ sung → form mới
+            if open_page_count >= 5 and looks_like_phieu_bo_sung(
+                curr_header, curr_full
+            ):
+                return True, "phieu_bo_sung_new_form_header"
+        if looks_like_kiem_diem_header(curr_header, curr_full):
+            return True, "phieu_bo_sung_to_kiem_diem"
+
+    # Bản tự kiểm điểm: năm khác hoặc chuyển sang phiếu bổ sung / form kiểm điểm mới
+    if open_t.startswith("BAN_TU_KIEM"):
+        if curr_t == open_t or looks_like_kiem_diem_header(curr_header, curr_full):
+            if (
+                open_year is not None
+                and blob_year is not None
+                and open_year != blob_year
+            ):
+                return True, f"kiem_diem_new_year({blob_year})"
+            if open_page_count >= 6 and looks_like_kiem_diem_header(
+                curr_header, curr_full
+            ):
+                return True, "kiem_diem_new_form_header"
+        if looks_like_phieu_bo_sung(curr_header, curr_full):
+            return True, "kiem_diem_to_phieu_bo_sung"
 
     # Quyết định: số QĐ khác hoặc đã có trang + match QĐ mới
     if is_quyet_dinh_type(open_t) and is_quyet_dinh_type(curr_t):

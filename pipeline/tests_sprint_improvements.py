@@ -433,7 +433,7 @@ def test_identity_extract_from_phieu_and_cli_override() -> None:
     assert "Luat" in ident.ho_ten or "luat" in ident.ho_ten.lower()
     assert ident.cccd == "001234567890"
 
-    toc = "MUC LUC Tai lieu trong ho so dang vien cua dong chi: Nguyen Van A"
+    toc = "MUC LUC Tai lieu trong ho so dang vien cua dong chi: Nguyen Van Anh"
     ident2 = extract_member_identity_from_text(toc, source="toc")
     assert ident2.ho_ten is not None
     assert "Nguyen" in unidecode(ident2.ho_ten)
@@ -498,6 +498,103 @@ def test_orphan_review_namer() -> None:
     print("  OK  orphan_review_namer")
 
 
+def test_identity_reject_tdv_and_garbage_name() -> None:
+    from pipeline.identity_extractor import extract_member_identity_from_text
+
+    tdv = (
+        "PHIEU DANG VIEN\n"
+        "So TDV: 2772694\n"
+        "Ho va ten khai sinh: Lacain Ahang T\n"
+    )
+    bad = extract_member_identity_from_text(tdv, source="bad")
+    assert bad.cccd is None, bad
+    assert bad.ho_ten is None, bad
+
+    good = extract_member_identity_from_text(
+        "Ho va ten khai sinh: Pham Huu Luat\nSo CCCD: 001234567890\n",
+        source="good",
+    )
+    assert good.ho_ten is not None and "Luat" in good.ho_ten
+    assert good.cccd == "001234567890"
+    print("  OK  identity_reject_tdv_and_garbage_name")
+
+
+def test_orphan_closes_phieu_dang_vien() -> None:
+    from pipeline.boundary_detector import BoundaryDetector, PageClass
+
+    det = BoundaryDetector()
+    det.process_page(
+        _sig(
+            1,
+            size="A4_PORTRAIT",
+            matched="PHIEU_DANG_VIEN",
+            header="MAU 2 HSDV",
+            full="Trang 1/3 noi dung phieu",
+        )
+    )
+    d2 = det.process_page(
+        _sig(
+            2,
+            size="A4_PORTRAIT",
+            header="tiep theo",
+            full="Trang 2/3 noi dung phieu",
+        )
+    )
+    assert d2.page_class == PageClass.CONFIRMED_CONTINUATION, d2.reasoning
+    # TOC orphan phải đóng phiếu — trang sau không soft-cont vào phiếu
+    d3 = det.process_page(
+        _sig(3, size="A4_PORTRAIT", toc=True, header="MUC LUC TAI LIEU TRONG HO SO")
+    )
+    assert d3.page_class == PageClass.ORPHAN_PAGE
+    d4 = det.process_page(
+        _sig(4, size="A4_PORTRAIT", header="NOI DUNG BAT KY KHONG CATALOG")
+    )
+    assert d4.page_class == PageClass.ORPHAN_PAGE
+    groups, orphans = det.finalize()
+    assert any(g.page_numbers == [1, 2] for g in groups), groups
+    assert 3 in orphans and 4 in orphans
+    print("  OK  orphan_closes_phieu_dang_vien")
+
+
+def test_qd_tu_alias_and_chuan_y() -> None:
+    m = PartyDocMatcher()
+    r = m.match("THANH UY HA NOI\nSO 6294 - QD/TU", "")
+    assert r.doc_type_key == "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM", r
+    r2 = m.match(
+        "NGHI QUYET\nVe viec chuan y cong nhan dang vien chinh thuc",
+        "",
+    )
+    assert r2.doc_type_key == "QUYET_DINH_CONG_NHAN_DANG_VIEN_CHINH_THUC", r2
+    print("  OK  qd_tu_alias_and_chuan_y")
+
+
+def test_force_phieu_bo_sung_year_and_kiem_diem() -> None:
+    from pipeline.doc_identity import should_force_new_document
+
+    force, reason = should_force_new_document(
+        "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        2015,
+        None,
+        3,
+        "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        "MAU 3 HSDV PHIEU BO SUNG nam 2018",
+        "Ha Noi, nam 2018",
+    )
+    assert force and "year" in reason, (force, reason)
+
+    force2, reason2 = should_force_new_document(
+        "BAN_TU_KIEM_DIEM_HANG_NAM",
+        2012,
+        None,
+        8,
+        "BAN_TU_KIEM_DIEM_HANG_NAM",
+        "BAN TU KIEM DIEM HANG NAM",
+        "Nam 2016",
+    )
+    assert force2, (force2, reason2)
+    print("  OK  force_phieu_bo_sung_year_and_kiem_diem")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -524,6 +621,10 @@ def main() -> int:
         test_manifest_without_co_khong,
         test_prev_eod_boost,
         test_identity_extract_from_phieu_and_cli_override,
+        test_identity_reject_tdv_and_garbage_name,
+        test_orphan_closes_phieu_dang_vien,
+        test_qd_tu_alias_and_chuan_y,
+        test_force_phieu_bo_sung_year_and_kiem_diem,
         test_year_from_thang_nam_and_ocr_blob,
         test_orphan_review_namer,
     ]
