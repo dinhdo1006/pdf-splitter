@@ -286,7 +286,27 @@ def is_ly_lich_form_section(header_text: str, full_text: str = "") -> bool:
     """
     True nếu đây là mục đánh số bên trong form lý lịch
     (vd. 22) Tóm tắt quá trình…, 23) Đào tạo bồi dưỡng…).
+    Không áp dụng cho Phiếu ĐV / Phiếu bổ sung (cũng có mục 01), 02)…).
     """
+    blob_raw = (header_text or "") + "\n" + (full_text or "")[:500]
+    ascii_low = unidecode(blob_raw).lower()
+    # Phiếu / Mẫu HSDV — không phải mục lý lịch
+    if any(
+        x in ascii_low
+        for x in (
+            "phieu dang vien",
+            "phieu bo sung",
+            "mau 2",
+            "mu 2",
+            "mau 3",
+            "mu 3",
+            "mau 2-hsdv",
+            "mau 3-hsdv",
+            "hsdv",
+        )
+    ):
+        return False
+
     blob = _collapse(header_text + "\n" + (full_text or "")[:500])
     if not blob:
         return False
@@ -377,15 +397,39 @@ class PartyDocMatcher:
             logger.debug("[matcher] TOC listing (multi titles) — skip catalog")
             return MatchResult("", 0.0, "MUC_LUC", "toc")
 
+        blob_low = unidecode(
+            (header_text or "") + "\n" + (full_text or "")[:400]
+        ).lower()
+
+        # Phiếu ĐV / bổ sung TRƯỚC form_section (tránh 01) Họ tên → orphan)
+        looks_like_phieu_blob = looks_like_phieu or any(
+            x in blob_low
+            for x in (
+                "mau 2",
+                "mu 2",
+                "mau 2-hsdv",
+                "mau 3",
+                "mu 3",
+                "phieu dang vien",
+                "phieu bo sung",
+            )
+        )
+        if looks_like_phieu_blob:
+            for phrase, key in self._aliases:
+                if key not in {
+                    "PHIEU_DANG_VIEN",
+                    "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+                    "PHIEU_DANG_VIEN_CU_LUU_LICH_SU",
+                }:
+                    continue
+                if phrase and (phrase in header or phrase in _collapse(full_text or "")[:200]):
+                    return MatchResult(key, 100.0, phrase, "alias")
+
         if is_ly_lich_form_section(header_text, full_text):
             logger.debug("[matcher] form section detected — skip catalog match")
             return MatchResult("", 0.0, "FORM_SECTION", "form_section")
 
         # Appendix soft patterns (không phải catalog 104)
-        blob_low = unidecode(
-            (header_text or "") + "\n" + (full_text or "")[:400]
-        ).lower()
-
         # Biên bản / trích biên bản ≠ bản tự kiểm điểm / quyết định
         if "tu kiem diem" not in blob_low:
             if (
@@ -402,9 +446,7 @@ class PartyDocMatcher:
                 return MatchResult("", 0.0, kind, "appendix")
 
         # Ưu tiên Phiếu ĐV khi có Mẫu 2 / HSDV (tránh SO LY LICH field)
-        if looks_like_phieu or any(
-            x in blob_low for x in ("mau 2", "mu 2", "mau 2-hsdv", "phieu dang vien")
-        ):
+        if looks_like_phieu_blob:
             for phrase, key in self._aliases:
                 if key not in {
                     "PHIEU_DANG_VIEN",
@@ -428,7 +470,7 @@ class PartyDocMatcher:
                 "alias",
             )
 
-        # 1) Alias (chỉ substring đủ dài; fuzzy cao hơn)
+        # 1) Alias trên HEADER
         for phrase, key in self._aliases:
             if not phrase or len(phrase) < 10:
                 continue
@@ -442,6 +484,30 @@ class PartyDocMatcher:
                 if key.startswith("BAN_TU_KIEM") and "bien ban" in blob_low:
                     continue
                 return MatchResult(key, float(score), phrase, "alias")
+
+        # 1b) Alias mạnh trên FULL TEXT khi header OCR rác / quá ngắn
+        # (chỉ phrase dài ≥18 để tránh false positive)
+        full_collapsed = _collapse((full_text or "")[:900])
+        if full_collapsed and len(header) < 40:
+            for phrase, key in self._aliases:
+                if not phrase or len(phrase) < 18:
+                    continue
+                if key.startswith("BAN_TU_KIEM") and "bien ban" in blob_low:
+                    continue
+                if phrase in full_collapsed:
+                    return MatchResult(key, 92.0, phrase, "alias")
+                # QD/TU trong body
+            if re.search(
+                r"\b\d{1,6}\s*[-–/]?\s*QD\s*[-–/]?\s*T[UƯ]\b",
+                full_collapsed,
+                re.IGNORECASE,
+            ):
+                return MatchResult(
+                    "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM",
+                    94.0,
+                    "QD/TU",
+                    "alias",
+                )
 
         # 2) Catalog — yêu cầu phrase dài + match mạnh trên HEADER (không full page)
         if len(header) < 18:

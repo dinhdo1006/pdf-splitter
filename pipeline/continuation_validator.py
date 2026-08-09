@@ -304,6 +304,39 @@ class ContinuationValidator:
         if curr.has_doc_keyword:
             return ContinuationVerdict(False, "rule2", "curr_has_keyword", 0.0)
 
+        doc_key = (open_doc_type or "").upper()
+
+        # B2 trước — cache OCR không có bbox; phiếu/kiểm điểm vẫn soft-cont
+        if (
+            has_open_group
+            and doc_key
+            in {
+                "PHIEU_DANG_VIEN",
+                "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+                "BAN_TU_KIEM_DIEM_HANG_NAM",
+                "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI",
+            }
+            and not curr.has_doc_keyword
+            and not getattr(curr, "is_toc", False)
+            and curr.text_density >= 0.015
+        ):
+            from pipeline.doc_identity import (
+                looks_like_quyet_dinh_or_nghi_quyet,
+                looks_like_standalone_minutes,
+            )
+
+            if not looks_like_standalone_minutes(
+                curr.header_text, curr.full_text or ""
+            ) and not looks_like_quyet_dinh_or_nghi_quyet(
+                curr.header_text, curr.full_text or ""
+            ):
+                return ContinuationVerdict(
+                    True,
+                    "rule2",
+                    f"open_form_soft_midpage type={doc_key}",
+                    0.72,
+                )
+
         prev_blocks = getattr(prev, "header_blocks", None) or []
         prev_all = getattr(prev, "all_blocks", None) or prev_blocks
         curr_head_blocks = getattr(curr, "header_blocks", None) or []
@@ -336,8 +369,7 @@ class ContinuationValidator:
                     0.78,
                 )
 
-        # B) Soft form continuation — chỉ khi đang có group form nhiều trang
-        doc_key = (open_doc_type or "").upper()
+        # B) Soft form continuation — grid cells
         if (
             has_open_group
             and doc_key in MULTI_PAGE_FORM_TYPES

@@ -164,8 +164,8 @@ def should_force_new_document(
             return True, "phieu_dv_to_minutes"
         if looks_like_quyet_dinh_or_nghi_quyet(curr_header, curr_full):
             return True, "phieu_dv_to_quyet_dinh"
-        # Phiếu ĐV thường 2–4 trang; quá dài + header catalog mới → tách
-        if open_page_count >= 4 and (
+        # Phiếu ĐV thường 3–5 trang; quá dài + header catalog mới → tách
+        if open_page_count >= 6 and (
             looks_like_phieu_dang_vien(curr_header, curr_full) or curr_t == open_t
         ):
             return True, "phieu_dv_max_pages"

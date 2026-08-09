@@ -85,6 +85,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip deskew/CLAHE",
     )
     parser.add_argument(
+        "--use-ocr-cache",
+        action="store_true",
+        help="Dùng cache OCR trong output/_ocr_cache (bỏ qua OCR nếu có)",
+    )
+    parser.add_argument(
         "--pages",
         type=int,
         default=None,
@@ -284,12 +289,29 @@ def main() -> int:
         skew_threshold=config.SKEW_THRESHOLD,
     )
 
-    try:
-        ocr = OCREngine(lang=config.OCR_LANG, use_gpu=config.OCR_USE_GPU)
-    except Exception as exc:
-        logger.error(f"Failed to initialize OCR: {exc}")
-        ingestor.close()
-        return 1
+    from pipeline.ocr_cache import cache_coverage, cache_dir_for, load_signal, save_signal
+
+    ocr_cache_dir = cache_dir_for(output_dir, args.dpi, preprocess_enabled)
+    use_cache = bool(args.use_ocr_cache)
+    cache_full = False
+    if use_cache:
+        cov = cache_coverage(ocr_cache_dir, process_pages)
+        cache_full = cov >= process_pages
+        logger.info(
+            f"OCR cache: {ocr_cache_dir} coverage={cov}/{process_pages}"
+            + (" (skip OCR init)" if cache_full else "")
+        )
+
+    ocr = None
+    if not cache_full:
+        try:
+            ocr = OCREngine(lang=config.OCR_LANG, use_gpu=config.OCR_USE_GPU)
+        except Exception as exc:
+            logger.error(f"Failed to initialize OCR: {exc}")
+            ingestor.close()
+            return 1
+    else:
+        logger.info("Full OCR cache hit — boundary-only replay mode")
 
     hw_detector = None
     hw_ocr = None
@@ -362,23 +384,35 @@ def main() -> int:
             unit="page",
         ):
             try:
-                if preprocess_enabled:
-                    image, skew_angle = preprocessor.process(raw_image)
-                    if abs(skew_angle) > config.SKEW_THRESHOLD:
-                        logger.debug(
-                            f"Page {page_num}: corrected skew {skew_angle:.1f}°"
-                        )
-                else:
-                    image = raw_image
+                signal = None
+                if use_cache:
+                    signal = load_signal(ocr_cache_dir, page_num)
+                    if signal is not None:
+                        logger.debug(f"Page {page_num}: loaded from OCR cache")
 
-                signal = extractor.extract(
-                    page_num,
-                    image,
-                    hw_ocr,
-                    hw_detector,
-                    width_pt=width_pt,
-                    height_pt=height_pt,
-                )
+                if signal is None:
+                    if preprocess_enabled:
+                        image, skew_angle = preprocessor.process(raw_image)
+                        if abs(skew_angle) > config.SKEW_THRESHOLD:
+                            logger.debug(
+                                f"Page {page_num}: corrected skew {skew_angle:.1f}°"
+                            )
+                    else:
+                        image = raw_image
+
+                    signal = extractor.extract(
+                        page_num,
+                        image,
+                        hw_ocr,
+                        hw_detector,
+                        width_pt=width_pt,
+                        height_pt=height_pt,
+                    )
+                    try:
+                        save_signal(ocr_cache_dir, signal)
+                    except Exception as cex:
+                        logger.debug(f"OCR cache save skip page {page_num}: {cex}")
+
                 decision = detector.process_page(signal)
                 signal.boundary_score = decision.score
                 all_signals[page_num] = signal

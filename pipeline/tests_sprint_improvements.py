@@ -121,7 +121,7 @@ def test_reattach_sandwich() -> None:
     assert 5 in groups[0].page_numbers
     assert orphans == []
     assert decisions[0].action == "attach_prev"
-    assert decisions[0].reason == "sandwiched_between_same_group"
+    assert decisions[0].reason.startswith("sandwiched_between_same_group")
     print("  OK  reattach_sandwich")
 
 
@@ -145,7 +145,7 @@ def test_reattach_sandwich_not_into_quyet_dinh_minutes() -> None:
     groups, orphans, decisions = reattach_orphans([g], [29], signals)
     assert groups[0].page_numbers == [28, 30]
     assert orphans == [29]
-    assert decisions[0].reason == "no_sandwich_into_quyet_dinh"
+    assert decisions[0].reason.startswith("no_sandwich_into_quyet_dinh")
     print("  OK  reattach_sandwich_not_into_quyet_dinh_minutes")
 
 
@@ -195,7 +195,7 @@ def test_reattach_case4_size() -> None:
     signals = {5: _sig(5, size="BOOKLET_SMALL", score=0.2)}
     groups, orphans, decisions = reattach_orphans([g], [5], signals)
     assert 5 in groups[0].page_numbers
-    assert decisions[0].reason == "same_page_size_group_as_prev"
+    assert decisions[0].reason.startswith("same_page_size_group_as_prev")
     print("  OK  reattach_case4_size")
 
 
@@ -219,7 +219,7 @@ def test_reattach_trailing_phieu_dang_vien_page() -> None:
     groups, orphans, decisions = reattach_orphans([g], [22], signals)
     assert 22 in groups[0].page_numbers
     assert orphans == []
-    assert decisions[0].reason == "trailing_page_of_multi_page_form"
+    assert decisions[0].reason.startswith("trailing_page_of_multi_page_form")
     print("  OK  reattach_trailing_phieu_dang_vien_page")
 
 
@@ -595,6 +595,60 @@ def test_force_phieu_bo_sung_year_and_kiem_diem() -> None:
     print("  OK  force_phieu_bo_sung_year_and_kiem_diem")
 
 
+def test_phieu_numbered_fields_not_form_section() -> None:
+    m = PartyDocMatcher()
+    r = m.match(
+        "01) Ho va ten khai sinh: Pham Huu Luat",
+        "MAU 2 - HSDV\nPHIEU DANG VIEN\n01) Ho va ten",
+        page_size_group="A4_PORTRAIT",
+    )
+    assert r.source != "form_section", r
+    assert r.doc_type_key == "PHIEU_DANG_VIEN", r
+    print("  OK  phieu_numbered_fields_not_form_section")
+
+
+def test_form_section_continues_into_phieu() -> None:
+    det = BoundaryDetector()
+    det.process_page(
+        _sig(1, size="A4_PORTRAIT", matched="PHIEU_DANG_VIEN", header="MAU 2 HSDV")
+    )
+    s2 = _sig(2, size="A4_PORTRAIT", header="01) Ho va ten")
+    s2.is_form_section = True
+    d2 = det.process_page(s2)
+    assert d2.page_class == PageClass.CONFIRMED_CONTINUATION, d2.reasoning
+    groups, orphans = det.finalize()
+    assert groups[0].page_numbers == [1, 2]
+    assert 2 not in orphans
+    print("  OK  form_section_continues_into_phieu")
+
+
+def test_multipass_sandwich_reattach() -> None:
+    from pipeline.orphan_reattacher import reattach_orphans
+
+    g = DocumentGroup(
+        group_id=1,
+        raw_title="phieu",
+        doc_type="PHIEU_DANG_VIEN",
+        page_numbers=[21],
+        page_size_group="A4_PORTRAIT",
+    )
+    signals = {
+        21: _sig(21, matched="PHIEU_DANG_VIEN", header="MAU 2"),
+        22: _sig(22, header="p2", score=0.1),
+        23: _sig(23, header="p3", score=0.1),
+        24: _sig(24, header="p4", score=0.1),
+    }
+    groups, orphans, decisions = reattach_orphans(
+        [g], [22, 23, 24], signals
+    )
+    assert 22 not in orphans and 23 not in orphans and 24 not in orphans, (
+        orphans,
+        decisions,
+    )
+    assert groups[0].page_numbers == [21, 22, 23, 24]
+    print("  OK  multipass_sandwich_reattach")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -625,6 +679,9 @@ def main() -> int:
         test_orphan_closes_phieu_dang_vien,
         test_qd_tu_alias_and_chuan_y,
         test_force_phieu_bo_sung_year_and_kiem_diem,
+        test_phieu_numbered_fields_not_form_section,
+        test_form_section_continues_into_phieu,
+        test_multipass_sandwich_reattach,
         test_year_from_thang_nam_and_ocr_blob,
         test_orphan_review_namer,
     ]

@@ -52,7 +52,10 @@ class PagePreprocessor:
 
             angles: list[float] = []
             for line in lines:
-                x1, y1, x2, y2 = line[0]
+                pts = np.asarray(line).reshape(-1)
+                if pts.size < 4:
+                    continue
+                x1, y1, x2, y2 = (int(pts[0]), int(pts[1]), int(pts[2]), int(pts[3]))
                 dx = x2 - x1
                 dy = y2 - y1
                 if dx == 0:

@@ -258,7 +258,7 @@ class BoundaryDetector:
         open_t = (self._current_group.doc_type or "").upper()
         # Chặn soft-nuốt quá dài (phiếu / kiểm điểm)
         max_soft = {
-            "PHIEU_DANG_VIEN": 4,
+            "PHIEU_DANG_VIEN": 6,
             "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 6,
             "BAN_TU_KIEM_DIEM_HANG_NAM": 8,
             "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI": 8,
@@ -493,23 +493,39 @@ class BoundaryDetector:
             self._prev_was_blank = False
             return decision
 
-        # Mục form lý lịch (22), 23)…): chỉ gộp khi đang mở LL CÙNG size group
+        # Mục form lý lịch (22), 23)…): gộp khi đang mở LL / phiếu / kiểm điểm
         if getattr(signal, "is_form_section", False):
-            if (
-                is_ly_lich_open
-                and self._soft_size_continuation(signal)
-                and self._append_continuation(signal, "form_section_inside_ly_lich")
-            ):
-                decision = BoundaryDecision(
-                    page_num=signal.page_num,
-                    page_class=PageClass.CONFIRMED_CONTINUATION,
-                    score=score,
-                    confidence=confidence,
-                    reasoning=f"confirmed_cont[form_section_ly_lich] | {score_reason}",
-                )
-                self._prev_signal = signal
-                self._prev_was_blank = False
-                return decision
+            open_multi = open_doc in {
+                "LY_LICH_DANG_VIEN",
+                "LY_LICH_NGUOI_XIN_VAO_DANG",
+                "PHIEU_DANG_VIEN",
+                "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+            } or open_doc.startswith("BAN_TU_KIEM")
+            if open_multi:
+                cont_ok = False
+                if is_ly_lich_open:
+                    cont_ok = self._soft_size_continuation(
+                        signal
+                    ) and self._append_continuation(
+                        signal, "form_section_inside_ly_lich"
+                    )
+                else:
+                    cont_ok = self._append_continuation(
+                        signal, "form_section_inside_open_form"
+                    )
+                if cont_ok:
+                    decision = BoundaryDecision(
+                        page_num=signal.page_num,
+                        page_class=PageClass.CONFIRMED_CONTINUATION,
+                        score=score,
+                        confidence=confidence,
+                        reasoning=(
+                            f"confirmed_cont[form_section_open_form] | {score_reason}"
+                        ),
+                    )
+                    self._prev_signal = signal
+                    self._prev_was_blank = False
+                    return decision
             self._mark_orphan(signal, "form_section_not_catalog_document")
             decision = BoundaryDecision(
                 page_num=signal.page_num,

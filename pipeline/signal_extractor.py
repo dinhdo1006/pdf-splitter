@@ -99,7 +99,7 @@ class SignalExtractor:
 
     def __init__(
         self,
-        ocr_engine: OCREngine,
+        ocr_engine: OCREngine | None = None,
         matcher: PartyDocMatcher | None = None,
     ) -> None:
         self.ocr = ocr_engine

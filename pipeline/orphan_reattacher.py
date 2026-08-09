@@ -51,6 +51,8 @@ def reattach_orphans(
 ) -> tuple[list[DocumentGroup], list[int], list[ReattachDecision]]:
     """
     Returns (updated_groups, remaining_orphan_pages, decisions).
+    Chạy nhiều pass — orphan kẹp giữa hai orphan khác (vd. 22/23/24 phiếu)
+    chỉ sandwich được sau khi hai đầu đã gắn.
     """
     remaining_orphans = list(orphan_pages)
     updated_groups = list(groups)
@@ -64,53 +66,73 @@ def reattach_orphans(
     hard_min = getattr(config, "REATTACH_HARD_MIN_CONFIDENCE", 0.80)
     tent_min = getattr(config, "REATTACH_TENTATIVE_MIN_CONFIDENCE", 0.65)
 
-    for orphan_pn in sorted(orphan_pages):
-        if orphan_pn not in remaining_orphans:
-            continue
-
-        decision = _judge_orphan(
-            orphan_pn, page_to_group, all_signals, remaining_orphans
-        )
-        decisions.append(decision)
-
-        if decision.action not in ("attach_prev", "attach_chain_prev"):
-            continue
-        if decision.confidence < tent_min:
-            decision.action = "keep_orphan"
-            decision.reason = f"{decision.reason}|below_tentative_min"
-            continue
-
-        target_group = next(
-            (g for g in updated_groups if g.group_id == decision.target_group_id),
-            None,
-        )
-        if target_group is None:
-            continue
-
-        if orphan_pn not in target_group.page_numbers:
-            target_group.page_numbers.append(orphan_pn)
-            target_group.page_numbers.sort()
-        if orphan_pn in remaining_orphans:
-            remaining_orphans.remove(orphan_pn)
-        page_to_group[orphan_pn] = target_group
-
-        # Tentative nếu conf < hard threshold
-        if decision.confidence < hard_min:
-            target_group._is_tentative = True
-            target_group._reattach_confidence = min(
-                getattr(target_group, "_reattach_confidence", 1.0),
-                decision.confidence,
+    max_passes = 4
+    for pass_i in range(1, max_passes + 1):
+        if not remaining_orphans:
+            break
+        attached_this_pass = 0
+        # Snapshot — chỉ xét orphan còn lại
+        for orphan_pn in sorted(list(remaining_orphans)):
+            decision = _judge_orphan(
+                orphan_pn, page_to_group, all_signals, remaining_orphans
             )
-            logger.info(
-                f"[reattach] TENTATIVE page {orphan_pn} → group "
-                f"#{target_group.group_id} conf={decision.confidence:.2f} "
-                f"({decision.reason})"
+
+            if decision.action not in ("attach_prev", "attach_chain_prev"):
+                if pass_i == max_passes:
+                    decisions.append(decision)
+                continue
+            if decision.confidence < tent_min:
+                decision.action = "keep_orphan"
+                decision.reason = f"{decision.reason}|below_tentative_min"
+                if pass_i == max_passes:
+                    decisions.append(decision)
+                continue
+
+            target_group = next(
+                (g for g in updated_groups if g.group_id == decision.target_group_id),
+                None,
             )
-        else:
-            logger.info(
-                f"[reattach] page {orphan_pn} → group #{target_group.group_id} "
-                f"conf={decision.confidence:.2f} ({decision.reason})"
-            )
+            if target_group is None:
+                if pass_i == max_passes:
+                    decisions.append(decision)
+                continue
+
+            if orphan_pn not in target_group.page_numbers:
+                target_group.page_numbers.append(orphan_pn)
+                target_group.page_numbers.sort()
+            if orphan_pn in remaining_orphans:
+                remaining_orphans.remove(orphan_pn)
+            page_to_group[orphan_pn] = target_group
+            attached_this_pass += 1
+            decision.reason = f"{decision.reason}|pass{pass_i}"
+            decisions.append(decision)
+
+            if decision.confidence < hard_min:
+                target_group._is_tentative = True
+                target_group._reattach_confidence = min(
+                    getattr(target_group, "_reattach_confidence", 1.0),
+                    decision.confidence,
+                )
+                logger.info(
+                    f"[reattach] TENTATIVE page {orphan_pn} → group "
+                    f"#{target_group.group_id} conf={decision.confidence:.2f} "
+                    f"({decision.reason})"
+                )
+            else:
+                logger.info(
+                    f"[reattach] page {orphan_pn} → group #{target_group.group_id} "
+                    f"conf={decision.confidence:.2f} ({decision.reason})"
+                )
+
+        if attached_this_pass == 0:
+            # Ghi keep_orphan còn lại
+            for orphan_pn in sorted(remaining_orphans):
+                decisions.append(
+                    _judge_orphan(
+                        orphan_pn, page_to_group, all_signals, remaining_orphans
+                    )
+                )
+            break
 
     logger.info(
         f"[reattach] done: attached={len(orphan_pages) - len(remaining_orphans)}, "
@@ -181,13 +203,23 @@ def _judge_orphan(
         and signal is not None
         and not signal.matched_doc_type
         and not getattr(signal, "is_toc", False)
-        and float(getattr(signal, "boundary_score", 0.0) or 0.0) < 0.40
+        and (
+            float(getattr(signal, "boundary_score", 0.0) or 0.0) < 0.40
+            or (
+                getattr(signal, "is_form_section", False)
+                and (prev_group.doc_type or "").upper()
+                in {
+                    "PHIEU_DANG_VIEN",
+                    "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+                }
+            )
+        )
     ):
         from pipeline.doc_identity import looks_like_phieu_bo_sung
 
         open_t = (prev_group.doc_type or "").upper()
         max_soft = {
-            "PHIEU_DANG_VIEN": 4,
+            "PHIEU_DANG_VIEN": 6,
             "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 6,
             "BAN_TU_KIEM_DIEM_HANG_NAM": 8,
             "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI": 8,
@@ -223,7 +255,15 @@ def _judge_orphan(
             action="attach_prev",
             target_group_id=prev_group.group_id,
             reason="trailing_page_of_multi_page_form",
-            confidence=0.75,
+            confidence=(
+                0.88
+                if (prev_group.doc_type or "").upper()
+                in {
+                    "PHIEU_DANG_VIEN",
+                    "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+                }
+                else 0.75
+            ),
         )
 
     # CASE 3: orphan chain after multi-page form
