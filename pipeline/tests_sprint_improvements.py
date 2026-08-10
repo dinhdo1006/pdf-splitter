@@ -769,6 +769,63 @@ def test_multipass_sandwich_reattach() -> None:
     print("  OK  multipass_sandwich_reattach")
 
 
+def test_reattach_respects_soft_max() -> None:
+    from pipeline.orphan_reattacher import reattach_orphans
+
+    g = DocumentGroup(
+        group_id=1,
+        raw_title="LL",
+        doc_type="LY_LICH_DANG_VIEN",
+        page_numbers=list(range(1, 19)),  # 18 pages = soft max
+        page_size_group="BOOKLET_SMALL",
+    )
+    signals = {
+        pn: _sig(pn, size="BOOKLET_SMALL", header="tiep", full="noi dung")
+        for pn in range(1, 22)
+    }
+    groups, orphans, decisions = reattach_orphans([g], [19, 20, 21], signals)
+    assert groups[0].page_numbers == list(range(1, 19)), groups[0].page_numbers
+    assert 19 in orphans and 20 in orphans and 21 in orphans
+    assert any(
+        "max" in (d.reason or "").lower() for d in decisions
+    ), [d.reason for d in decisions]
+    print("  OK  reattach_respects_soft_max")
+
+
+def test_promote_orphans_to_groups() -> None:
+    from pipeline.orphan_reattacher import promote_orphans_to_groups
+
+    signals = {
+        150: _sig(
+            150,
+            size="A4_PORTRAIT",
+            header="MAU 3-HSDV\nPHIEU BO SUNG",
+            full="Ho so dang vien",
+        ),
+        151: _sig(151, size="A4_PORTRAIT", header="tiep", full="noi dung phieu"),
+        152: _sig(152, size="A4_PORTRAIT", toc=True, header="MUC LUC"),
+    }
+    groups, orphans, n = promote_orphans_to_groups([], [150, 151, 152], signals)
+    assert n >= 1
+    assert any(
+        g.doc_type == "PHIEU_BO_SUNG_HO_SO_DANG_VIEN" for g in groups
+    ), groups
+    assert 152 in orphans  # TOC giữ orphan
+    print("  OK  promote_orphans_to_groups")
+
+
+def test_identity_dot_ocr_name() -> None:
+    from pipeline.identity_extractor import extract_member_identity_from_text
+
+    got = extract_member_identity_from_text(
+        "Ho va ten: Pham. Huu. Luat\nSo CCCD: 001234567890\n",
+        source="dots",
+    )
+    assert got.ho_ten is not None and "Luat" in got.ho_ten, got
+    assert got.cccd == "001234567890"
+    print("  OK  identity_dot_ocr_name")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -806,6 +863,9 @@ def main() -> int:
         test_multipass_sandwich_reattach,
         test_year_from_thang_nam_and_ocr_blob,
         test_orphan_review_namer,
+        test_reattach_respects_soft_max,
+        test_promote_orphans_to_groups,
+        test_identity_dot_ocr_name,
     ]
     failed = 0
     for t in tests:

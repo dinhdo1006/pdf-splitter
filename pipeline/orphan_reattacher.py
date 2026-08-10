@@ -97,6 +97,17 @@ def reattach_orphans(
                     decisions.append(decision)
                 continue
 
+            # Soft-max cứng — mọi case (kể cả sandwich) không vượt cap
+            max_soft = soft_max_pages_for(target_group.doc_type)
+            if max_soft is not None and len(target_group.page_numbers) >= max_soft:
+                decision.action = "keep_orphan"
+                decision.reason = (
+                    f"{decision.reason}|blocked_soft_max({max_soft})"
+                )
+                if pass_i == max_passes:
+                    decisions.append(decision)
+                continue
+
             if orphan_pn not in target_group.page_numbers:
                 target_group.page_numbers.append(orphan_pn)
                 target_group.page_numbers.sort()
@@ -185,6 +196,15 @@ def _judge_orphan(
                 action="keep_orphan",
                 target_group_id=None,
                 reason="minutes_sandwich_keep_orphan",
+                confidence=1.0,
+            )
+        max_soft = soft_max_pages_for(prev_group.doc_type)
+        if max_soft is not None and len(prev_group.page_numbers) >= max_soft:
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason=f"sandwich_blocked_soft_max({max_soft})",
                 confidence=1.0,
             )
         return ReattachDecision(
@@ -351,3 +371,120 @@ def _judge_orphan(
 
 def decisions_to_dicts(decisions: list[ReattachDecision]) -> list[dict]:
     return [asdict(d) for d in decisions]
+
+
+def _infer_orphan_doc_type(signal: PageSignal) -> Optional[str]:
+    """Suy loại catalog từ signal orphan (matcher + heuristic)."""
+    from pipeline.doc_identity import (
+        looks_like_kiem_diem_header,
+        looks_like_ly_lich_header,
+        looks_like_phieu_bo_sung,
+        looks_like_phieu_dang_vien,
+        looks_like_quyet_dinh_or_nghi_quyet,
+    )
+    from pipeline.party_doc_matcher import get_matcher
+    from pipeline.party_catalog import PARTY_DOC_CATALOG
+
+    dtype = (getattr(signal, "matched_doc_type", "") or "").upper()
+    if dtype and dtype in PARTY_DOC_CATALOG:
+        return dtype
+
+    header = getattr(signal, "header_text", "") or ""
+    full = getattr(signal, "full_text", "") or ""
+    size = getattr(signal, "page_size_group", "OTHER") or "OTHER"
+    result = get_matcher().match(header, full[:900], page_size_group=size)
+    key = (result.doc_type_key or "").upper()
+    if key and key in PARTY_DOC_CATALOG:
+        return key
+
+    if looks_like_phieu_bo_sung(header, full):
+        return "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
+    if looks_like_phieu_dang_vien(header, full):
+        return "PHIEU_DANG_VIEN"
+    if looks_like_kiem_diem_header(header, full):
+        return "BAN_TU_KIEM_DIEM_HANG_NAM"
+    if looks_like_ly_lich_header(header, full):
+        return "LY_LICH_DANG_VIEN"
+    if looks_like_quyet_dinh_or_nghi_quyet(header, full):
+        # Generic bucket for quyết định điều động / công nhận khi matcher miss
+        return "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
+    return None
+
+
+def promote_orphans_to_groups(
+    groups: list[DocumentGroup],
+    orphan_pages: list[int],
+    all_signals: dict[int, PageSignal],
+) -> tuple[list[DocumentGroup], list[int], int]:
+    """
+    Orphan có loại catalog rõ → mở DocumentGroup mới (chuỗi trang liền kề cùng loại).
+    Giảm orphan rate khi soft-max/title miss khiến trang bị cách ly.
+    """
+    if not orphan_pages:
+        return groups, orphan_pages, 0
+
+    orphan_set = set(orphan_pages)
+    used: set[int] = set()
+    new_groups: list[DocumentGroup] = []
+    next_id = max((g.group_id for g in groups), default=0) + 1
+    promoted = 0
+
+    for pn in sorted(orphan_pages):
+        if pn in used:
+            continue
+        sig = all_signals.get(pn)
+        if sig is None or getattr(sig, "is_toc", False):
+            continue
+        if _looks_like_standalone_minutes(sig):
+            continue
+        dtype = _infer_orphan_doc_type(sig)
+        if not dtype:
+            continue
+
+        chain = [pn]
+        used.add(pn)
+        cur = pn + 1
+        while cur in orphan_set and cur not in used:
+            sig_n = all_signals.get(cur)
+            if sig_n is None or getattr(sig_n, "is_toc", False):
+                break
+            if _looks_like_standalone_minutes(sig_n):
+                break
+            dtype_n = _infer_orphan_doc_type(sig_n)
+            # Tiếp tục chuỗi nếu cùng loại hoặc chưa nhận loại (mid-page)
+            if dtype_n and dtype_n != dtype:
+                break
+            if dtype_n is None:
+                # mid-page: chỉ nối nếu density ổn và chưa chạm soft-max
+                max_soft = soft_max_pages_for(dtype)
+                if max_soft is not None and len(chain) >= max_soft:
+                    break
+                if (getattr(sig_n, "text_density", 0) or 0) < 0.01:
+                    break
+            chain.append(cur)
+            used.add(cur)
+            cur += 1
+            max_soft = soft_max_pages_for(dtype)
+            if max_soft is not None and len(chain) >= max_soft:
+                break
+
+        g = DocumentGroup(
+            group_id=next_id,
+            raw_title=(getattr(sig, "header_text", "") or "")[:200],
+            doc_type=dtype,
+            page_numbers=list(chain),
+            page_size_group=getattr(sig, "page_size_group", "OTHER") or "OTHER",
+        )
+        next_id += 1
+        new_groups.append(g)
+        promoted += len(chain)
+        logger.info(
+            f"[promote] orphan pages {chain[0]}-{chain[-1]} → "
+            f"group #{g.group_id} type={dtype}"
+        )
+
+    if not new_groups:
+        return groups, orphan_pages, 0
+
+    remaining = [p for p in orphan_pages if p not in used]
+    return list(groups) + new_groups, remaining, promoted

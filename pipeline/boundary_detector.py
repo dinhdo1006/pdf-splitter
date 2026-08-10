@@ -298,17 +298,47 @@ class BoundaryDetector:
         score_reason: str,
         cont_reason: str,
     ) -> tuple[PageClass, str]:
-        """Thử soft-continue; nếu soft-max đóng group thì mở NEW khi trang giống form mới."""
+        """Thử soft-continue; soft-max → NEW (cùng loại) thay vì orphan khi có thể."""
         if self._append_continuation(signal, cont_reason):
             return (
                 PageClass.CONFIRMED_CONTINUATION,
                 f"confirmed_cont[{cont_reason}] | {score_reason}",
             )
+        # Soft-max vừa đóng group — ưu tiên mở NEW
         if self._page_looks_like_new_form(signal):
             self._open_new_group(
                 signal, score, f"after_soft_max|{cont_reason}|{score_reason}"
             )
             return PageClass.NEW_DOCUMENT, f"new[after_soft_max] | {score_reason}"
+        # Form đa trang còn tiếp (cùng khổ / mid-page) → tách file mới cùng loại
+        if self._groups:
+            last = self._groups[-1]
+            last_t = (last.doc_type or "").upper()
+            if last_t in MULTI_PAGE_FORM_TYPES or last_t.startswith("BAN_TU_KIEM"):
+                same_size = (
+                    signal.page_size_group == last.page_size_group
+                    and signal.page_size_group != "OTHER"
+                )
+                mid_like = (
+                    not getattr(signal, "is_toc", False)
+                    and not looks_like_standalone_minutes(
+                        signal.header_text, signal.full_text or ""
+                    )
+                    and (signal.text_density or 0) >= 0.01
+                )
+                if same_size or mid_like:
+                    if not signal.matched_doc_type:
+                        signal.matched_doc_type = last.doc_type
+                        signal.has_doc_keyword = True
+                    self._open_new_group(
+                        signal,
+                        score,
+                        f"split_after_soft_max({last_t})|{cont_reason}|{score_reason}",
+                    )
+                    return (
+                        PageClass.NEW_DOCUMENT,
+                        f"new[split_after_soft_max] | {score_reason}",
+                    )
         self._mark_orphan(signal, f"soft_max_or_no_open | {cont_reason}")
         return PageClass.ORPHAN_PAGE, f"orphan[soft_max_or_no_open] | {score_reason}"
 

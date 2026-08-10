@@ -565,16 +565,24 @@ def refine_unknown_group_types(
     all_signals: dict,
 ) -> int:
     """
-    Post-classify nhóm CHUA_XAC_DINH bằng matcher trên vài trang đầu.
+    Post-classify nhóm CHUA_XAC_DINH bằng matcher + heuristic trên vài trang đầu.
     Returns số group được gán lại catalog.
     """
+    from pipeline.doc_identity import (
+        looks_like_kiem_diem_header,
+        looks_like_ly_lich_header,
+        looks_like_phieu_bo_sung,
+        looks_like_phieu_dang_vien,
+        looks_like_quyet_dinh_or_nghi_quyet,
+    )
+
     matcher = get_matcher()
     updated = 0
     for g in groups:
         key = (getattr(g, "doc_type", "") or "").upper()
         if key and key in PARTY_DOC_CATALOG and key != "CHUA_XAC_DINH":
             continue
-        pages = list(getattr(g, "page_numbers", []) or [])[:3]
+        pages = list(getattr(g, "page_numbers", []) or [])[:4]
         if not pages:
             continue
         headers: list[str] = []
@@ -589,19 +597,33 @@ def refine_unknown_group_types(
             size = getattr(sig, "page_size_group", size) or size
         if not headers:
             continue
+        header_blob = "\n".join(headers)
+        full_blob = "\n".join(fulls)
         result = matcher.match(
-            "\n".join(headers),
-            "\n".join(fulls),
+            header_blob,
+            full_blob,
             page_size_group=size,
         )
         new_key = (result.doc_type_key or "").upper()
-        if new_key and new_key in PARTY_DOC_CATALOG:
-            g.doc_type = new_key
-            if not getattr(g, "raw_title", None) and result.matched_phrase:
-                g.raw_title = result.matched_phrase
-            updated += 1
-            logger.info(
-                f"[refine] group #{getattr(g, 'group_id', '?')} "
-                f"CHUA_XAC_DINH → {new_key} (score={result.score:.1f})"
-            )
+        if not (new_key and new_key in PARTY_DOC_CATALOG):
+            if looks_like_phieu_bo_sung(header_blob, full_blob):
+                new_key = "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
+            elif looks_like_phieu_dang_vien(header_blob, full_blob):
+                new_key = "PHIEU_DANG_VIEN"
+            elif looks_like_kiem_diem_header(header_blob, full_blob):
+                new_key = "BAN_TU_KIEM_DIEM_HANG_NAM"
+            elif looks_like_ly_lich_header(header_blob, full_blob):
+                new_key = "LY_LICH_DANG_VIEN"
+            elif looks_like_quyet_dinh_or_nghi_quyet(header_blob, full_blob):
+                new_key = "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
+            else:
+                continue
+        g.doc_type = new_key
+        if not getattr(g, "raw_title", None) and result.matched_phrase:
+            g.raw_title = result.matched_phrase
+        updated += 1
+        logger.info(
+            f"[refine] group #{getattr(g, 'group_id', '?')} "
+            f"CHUA_XAC_DINH → {new_key} (score={result.score:.1f})"
+        )
     return updated

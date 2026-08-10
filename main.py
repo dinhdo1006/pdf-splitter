@@ -518,6 +518,21 @@ def main() -> int:
     except Exception as rex:
         logger.error(f"Pass-2 reattach failed (giữ orphans gốc): {rex}")
 
+    # Pass-2b: orphan có catalog/header rõ → group mới (không nhồi vào prev)
+    try:
+        from pipeline.orphan_reattacher import promote_orphans_to_groups
+
+        groups, orphan_pages, n_promoted = promote_orphans_to_groups(
+            groups, orphan_pages, all_signals
+        )
+        if n_promoted:
+            logger.info(
+                f"Promoted {n_promoted} orphan pages → new catalog groups "
+                f"({len(orphan_pages)} orphans left)"
+            )
+    except Exception as pex:
+        logger.error(f"Promote orphans failed: {pex}")
+
     # Post-classify nhóm CHUA_XAC_DINH → catalog nếu match được
     try:
         from pipeline.party_doc_matcher import refine_unknown_group_types
@@ -607,7 +622,10 @@ def main() -> int:
             and hoso_manifest is not None
             and getattr(hoso_manifest, "party_member_name", None)
         ):
-            ocr_ident.ho_ten = hoso_manifest.party_member_name
+            from pipeline.identity_extractor import _clean_person_name
+
+            cleaned = _clean_person_name(hoso_manifest.party_member_name)
+            ocr_ident.ho_ten = cleaned or hoso_manifest.party_member_name
             ocr_ident.sources.append("ho_ten:hoso_manifest")
             ocr_ident.confidence = max(ocr_ident.confidence, 0.5)
         docs_dir = resolve_docs_dir(args, output_dir, ocr_ident)

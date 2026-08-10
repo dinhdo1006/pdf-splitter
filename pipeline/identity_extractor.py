@@ -200,8 +200,8 @@ def _name_quality_ok(name: str) -> bool:
     # Quá nhiều phụ âm liên tiếp → OCR méo
     if re.search(r"[bcdfghjklmnpqrstvwxz]{5,}", ascii_n.lower()):
         return False
-    # Ưu tiên họ phổ biến; nếu không có thì vẫn OK khi không suspicious
-    if parts[0].lower() not in _COMMON_SURNAMES and len(parts) >= 4:
+    # 5 tiếng mà không phải họ phổ biến → nghi OCR rác
+    if len(parts) >= 5 and parts[0].lower() not in _COMMON_SURNAMES:
         return False
     return True
 
@@ -211,13 +211,17 @@ def _clean_person_name(raw: str) -> Optional[str]:
         return None
     # Cắt tại xuống dòng / nhãn số giấy tờ
     raw = re.split(r"[\n\r]+", raw, maxsplit=1)[0]
-    name = re.sub(r"[\d:;|/\\]+", " ", raw)
+    # OCR hay chấm giữa tiếng: "PHAM. HU. LUAT" → khoảng trắng
+    name = re.sub(r"[.\u2022·]+", " ", raw)
+    name = re.sub(r"[\d:;|/\\]+", " ", name)
     name = re.sub(r"\s+", " ", name).strip(" .-_,")
     # Cắt phần sau nhãn phụ (bí danh / tên gọi khác / CCCD…)
+    # Tránh cắt nhầm tiếng "Nam" trong họ tên: chỉ cắt giới tính khi có dấu / hoặc nhãn
     name = re.split(
         r"\b(bi\s*danh|ten\s*goi\s*khac|ten\s*khac|alias|"
-        r"nam|nu|sinh|ngay|que|quan|thuong|tru|dan|toc|so\s*cccd|so\s*cmnd|"
-        r"cccd|cmnd|so\s*tdv|the\s*dang)\b",
+        r"gioi\s*tinh|sinh\s*ngay|ngay\s*sinh|que\s*quan|thuong\s*tru|"
+        r"dan\s*toc|so\s*cccd|so\s*cmnd|cccd|cmnd|so\s*tdv|the\s*dang|"
+        r"/\s*nam\b|/\s*nu\b)\b",
         name,
         maxsplit=1,
         flags=re.IGNORECASE,
@@ -238,8 +242,15 @@ def _clean_person_name(raw: str) -> Optional[str]:
 
 
 def _extract_name_from_blob(blob: str) -> Optional[str]:
+    # Chuẩn hóa chấm OCR giữa các tiếng: "Pham. Huu. Luat" / "Pham.Huu"
+    norm = re.sub(
+        r"\.(?=\s*[A-Za-zÀ-ỹĐđ])",
+        " ",
+        blob or "",
+    )
+    norm = re.sub(r"\s+", " ", norm)
     for cre in _NAME_PATTERNS:
-        m = cre.search(blob)
+        m = cre.search(norm) or cre.search(blob or "")
         if not m:
             continue
         name = _clean_person_name(m.group(1))
