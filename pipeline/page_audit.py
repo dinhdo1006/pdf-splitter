@@ -454,13 +454,182 @@ def absorb_unknown_into_adjacent_kiem_diem(
     return [g for g in groups if g.group_id not in drop_ids], absorbed
 
 
+def apply_catalog_discard_policy(
+    groups: list[DocumentGroup],
+    all_signals: dict[int, PageSignal],
+    orphan_pages: list[int],
+    blank_pages: list[int],
+) -> tuple[list[DocumentGroup], list[int], list[int], int]:
+    """
+    Loại trang ngoài Phụ lục 1 → blank (không export orphan review).
+
+    Giữ: họp chi đoàn ĐV dự bị (TT 49) đã promote thành group.
+    Bỏ: mục lục, listing, biên bản chi bộ/tổ, nơi cư trú hằng năm, QĐ lương.
+    """
+    from pipeline.doc_identity import (
+        is_out_of_catalog_discard,
+        looks_like_hop_chi_doan_y_kien_du_bi,
+        looks_like_luong_quyet_dinh,
+        looks_like_noi_cu_tru_form_section,
+        looks_like_quyet_dinh_or_nghi_quyet,
+        looks_like_standalone_minutes,
+    )
+
+    blank_set = set(blank_pages)
+    discarded = 0
+
+    # 1) Orphans ngoài catalog → blank
+    keep_orphans: list[int] = []
+    for pn in orphan_pages:
+        sig = all_signals.get(pn)
+        header = getattr(sig, "header_text", "") if sig else ""
+        full = getattr(sig, "full_text", "") if sig else ""
+        is_toc = bool(sig and getattr(sig, "is_toc", False))
+        if is_out_of_catalog_discard(header or "", full or "", is_toc=is_toc):
+            blank_set.add(pn)
+            discarded += 1
+            logger.info(f"[discard] orphan page {pn} → blank (out of catalog)")
+        else:
+            keep_orphans.append(pn)
+
+    # 2) Trong group: nơi cư trú / lương / biên bản không phải TT 49
+    kept_groups: list[DocumentGroup] = []
+    next_id = max((g.group_id for g in groups), default=0) + 1
+    for g in groups:
+        host = (g.doc_type or "").upper()
+        stay: list[int] = []
+        peeled_qd: list[list[int]] = []  # QĐ mới bị kẹt trong CAC
+
+        for pn in g.page_numbers:
+            sig = all_signals.get(pn)
+            header = getattr(sig, "header_text", "") if sig else ""
+            full = getattr(sig, "full_text", "") if sig else ""
+            h = header or ""
+            f = full or ""
+
+            if looks_like_hop_chi_doan_y_kien_du_bi(h, f):
+                stay.append(pn)
+                continue
+            if looks_like_noi_cu_tru_form_section(h, f) or looks_like_luong_quyet_dinh(
+                h, f
+            ):
+                blank_set.add(pn)
+                discarded += 1
+                logger.info(
+                    f"[discard] page {pn} from #{g.group_id} ({host}) → blank"
+                )
+                continue
+            # Biên bản lẫn trong group catalog (trừ TT 49 host)
+            if looks_like_standalone_minutes(h, f) and not host.startswith(
+                "TONG_HOP_Y_KIEN"
+            ):
+                blank_set.add(pn)
+                discarded += 1
+                logger.info(
+                    f"[discard] minutes page {pn} from #{g.group_id} → blank"
+                )
+                continue
+            # Tách QĐ mới (số QD khác) khỏi cụm CAC bị over-merge
+            if (
+                host.startswith("CAC_QUYET_DINH")
+                and stay
+                and looks_like_quyet_dinh_or_nghi_quyet(h, f)
+                and not looks_like_luong_quyet_dinh(h, f)
+            ):
+                from unidecode import unidecode
+                import re as _re
+
+                head = unidecode(h[:220]).lower()
+                if (
+                    _re.search(r"\bso[:\s].{0,12}qd", head)
+                    or ("quyet dinh" in head and ("v/v" in head or "v vic" in head))
+                ):
+                    peeled_qd.append([pn])
+                    continue
+            if peeled_qd and looks_like_quyet_dinh_or_nghi_quyet(h, f):
+                from unidecode import unidecode
+                from pipeline.doc_identity import looks_like_qd_body_continuation
+                import re as _re
+
+                head2 = unidecode(h[:200]).lower()
+                if _re.search(r"\bso[:\s].{0,12}qd", head2) and "quyet dinh" in head2:
+                    peeled_qd.append([pn])
+                elif looks_like_qd_body_continuation(h, f):
+                    peeled_qd[-1].append(pn)
+                else:
+                    peeled_qd[-1].append(pn)
+                continue
+            if peeled_qd:
+                from pipeline.doc_identity import looks_like_qd_body_continuation
+
+                if looks_like_qd_body_continuation(h, f):
+                    peeled_qd[-1].append(pn)
+                    continue
+            stay.append(pn)
+
+        if stay:
+            g.page_numbers = stay
+            kept_groups.append(g)
+        else:
+            logger.warning(f"[discard] Drop empty group #{g.group_id}")
+
+        for pages in peeled_qd:
+            if not pages:
+                continue
+            # Lương đã discard ở trên; phần còn lại = QĐ catalog riêng
+            sig0 = all_signals.get(pages[0])
+            ng = DocumentGroup(
+                group_id=next_id,
+                raw_title=(getattr(sig0, "header_text", "") or "")[:200]
+                if sig0
+                else "",
+                doc_type="CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM",
+                page_numbers=list(pages),
+                page_size_group=(
+                    getattr(sig0, "page_size_group", "A4_PORTRAIT")
+                    if sig0
+                    else "A4_PORTRAIT"
+                ),
+            )
+            next_id += 1
+            kept_groups.append(ng)
+            logger.info(
+                f"[discard] Peel QĐ pages {pages[0]}-{pages[-1]} → group #{ng.group_id}"
+            )
+
+    # KHAC còn lại toàn discard-able → blank
+    final_groups: list[DocumentGroup] = []
+    for g in kept_groups:
+        host = (g.doc_type or "").upper()
+        if host not in {"CHUA_XAC_DINH", ""}:
+            final_groups.append(g)
+            continue
+        stay = []
+        for pn in g.page_numbers:
+            sig = all_signals.get(pn)
+            header = getattr(sig, "header_text", "") if sig else ""
+            full = getattr(sig, "full_text", "") if sig else ""
+            if is_out_of_catalog_discard(header or "", full or ""):
+                blank_set.add(pn)
+                discarded += 1
+                logger.info(f"[discard] KHAC page {pn} → blank")
+            else:
+                stay.append(pn)
+        if stay:
+            g.page_numbers = stay
+            final_groups.append(g)
+
+    return final_groups, keep_orphans, sorted(blank_set), discarded
+
+
 def merge_adjacent_same_year_groups(
     groups: list[DocumentGroup],
     max_pages_by_type: dict[str, int] | None = None,
 ) -> tuple[list[DocumentGroup], int]:
     """
     Gộp nhóm cùng loại + trang liền nhau (vd. phiếu bổ sung bị soft-max cắt).
-    Kiểm điểm: bắt buộc cùng năm. Phiếu/QĐ: cho phép thiếu năm một bên.
+    Kiểm điểm: bắt buộc cùng năm. Phiếu: cho phép thiếu năm một bên.
+    Không gộp CAC_QUYET.
     """
     import config as cfg
 
@@ -469,7 +638,6 @@ def merge_adjacent_same_year_groups(
     ) or {
         "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 12,
         "PHIEU_DANG_VIEN": 10,
-        "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM": 6,
     }
     if not groups:
         return groups, 0
@@ -483,9 +651,10 @@ def merge_adjacent_same_year_groups(
 
     for g in ordered:
         dtype = (g.doc_type or "").upper()
+        if dtype.startswith("CAC_QUYET_DINH"):
+            merged.append(g)
+            continue
         cap = caps.get(dtype)
-        if cap is None and dtype.startswith("CAC_QUYET_DINH"):
-            cap = caps.get("CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM", 6)
         can_try = (
             merged
             and cap is not None

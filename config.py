@@ -52,17 +52,17 @@ DOC_TYPE_SOFT_MAX_PAGES = {
     "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI": 8,
     "BAN_TU_KIEM_DIEM_TAI_THOI_DIEM_CHUYEN": 8,
     "BAN_TU_KIEM_DIEM_DANG_VIEN_VI_PHAM": 8,
-    "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI": 1,
+    "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI": 4,  # họp chi đoàn ĐV dự bị 2–4 trang
     "TONG_HOP_Y_KIEN_NHAN_XET_NGUOI_VAO_DANG": 1,
     "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM": 6,
     "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON": 4,
 }
 
 # Post-pass: gộp lại nhóm cùng loại + cùng năm + trang liền (sau soft-max cắt)
+# Không gộp CAC_QUYET — tránh dính QĐ khác số / QĐ lương
 DOC_TYPE_SAME_YEAR_MERGE_MAX = {
     "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 12,
     "PHIEU_DANG_VIEN": 10,
-    "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM": 6,
 }
 
 # Khi hồ sơ không có CCCD trong OCR, dùng số TĐV làm khóa thư mục Phụ lục 2

@@ -177,8 +177,7 @@ _ALIASES: list[tuple[str, str]] = [
     ("quyet dinh dieu dong", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
     ("quyet dinh bo nhiem", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
     ("quyet dinh chuyen cong tac", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
-    ("quyet dinh nang luong", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
-    ("quyet dinh nang bac luong", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
+    # QĐ lương → ngoài catalog (discard), không alias vào TT 87
     ("quyet dinh tuyen dung", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
     ("quyet dinh tiep nhan", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
 ]
@@ -443,8 +442,26 @@ class PartyDocMatcher:
             logger.debug("[matcher] form section detected — skip catalog match")
             return MatchResult("", 0.0, "FORM_SECTION", "form_section")
 
+        from pipeline.doc_identity import (
+            looks_like_hop_chi_doan_y_kien_du_bi,
+            looks_like_luong_quyet_dinh,
+        )
+
+        # TT 49: họp chi đoàn xét ĐV dự bị — trước appendix biên bản
+        if looks_like_hop_chi_doan_y_kien_du_bi(header_text, full_text):
+            return MatchResult(
+                "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI",
+                96.0,
+                "hop chi doan du bi",
+                "alias",
+            )
+
+        # QĐ lương ngoài catalog
+        if looks_like_luong_quyet_dinh(header_text, full_text):
+            return MatchResult("", 0.0, "QD_LUONG", "none")
+
         # Appendix soft patterns (không phải catalog 104)
-        # Biên bản / họp chi đoàn xét ≠ bản tự kiểm điểm / quyết định
+        # Biên bản / họp chi bộ|chi đoàn khác ≠ bản tự kiểm điểm / quyết định
         if "tu kiem diem" not in blob_low:
             compact_blob = re.sub(r"[\s\-_\.]+", "", blob_low)
             if (

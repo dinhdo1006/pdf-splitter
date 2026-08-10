@@ -36,6 +36,7 @@ def _sig(
     full: str = "",
     eod: bool = False,
     eod_conf: float = 0.0,
+    dens: float = 0.2,
 ) -> PageSignal:
     return PageSignal(
         page_num=page_num,
@@ -46,7 +47,7 @@ def _sig(
         matched_keyword=matched,
         has_large_centered_text=False,
         is_continuation=False,
-        text_density=0.2,
+        text_density=dens,
         is_blank=False,
         avg_confidence=0.8,
         matched_doc_type=matched,
@@ -1261,7 +1262,7 @@ def test_v10_classify_remaining_pages() -> None:
         59, _sig(59, header=listing, full=listing)
     ).startswith("MUC_LUC")
 
-    # 83 nơi cư trú → không standalone; sandwich vào phiếu
+    # 83 nơi cư trú hằng năm → không gắn phiếu (discard sau)
     nx = _sig(
         83,
         size="A4_PORTRAIT",
@@ -1293,7 +1294,7 @@ def test_v10_classify_remaining_pages() -> None:
             84: _sig(84, size="A4_PORTRAIT", matched="PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
         },
     )
-    assert 83 in groups[0].page_numbers
+    assert 83 in orphans
 
     # 99 đánh giá phân loại
     assert looks_like_danh_gia_phan_loai(
@@ -1301,6 +1302,117 @@ def test_v10_classify_remaining_pages() -> None:
         "Ket qua bieu quyet",
     )
     print("  OK  v10_classify_remaining_pages")
+
+
+def test_v11_gemini_catalog_policy() -> None:
+    """Gemini chắc chắn: TT 49 chi đoàn; bỏ mục lục/BB thừa/nơi cư trú/QĐ lương."""
+    from pipeline.doc_identity import (
+        is_out_of_catalog_discard,
+        looks_like_hop_chi_doan_y_kien_du_bi,
+        looks_like_luong_quyet_dinh,
+    )
+    from pipeline.orphan_reattacher import promote_orphans_to_groups
+    from pipeline.page_audit import apply_catalog_discard_policy
+
+    hop = (
+        "HOP CHI-DOAN BUU DIEN SOC SON XET KIEM DIEM DANG VIEN "
+        "DU BI CHUYEN SANG SINH HOAT CHINH THUC"
+    )
+    assert looks_like_hop_chi_doan_y_kien_du_bi(hop, "xet ban kiem diem")
+    assert not is_out_of_catalog_discard(hop, "du bi")
+
+    signals = {
+        35: _sig(35, header=hop, full="xet ban kiem diem dang vien du bi", dens=0.8),
+        36: _sig(
+            36,
+            header="sau khi doc ban kiem diem",
+            full="bien ban cuoc hop y kien dong chi",
+            dens=0.9,
+        ),
+        37: _sig(
+            37,
+            header="toan bo doan vien",
+            full="nhat cho chuyen thanh dang vien chinh thuc 15.11.94",
+            dens=0.5,
+        ),
+        20: _sig(20, toc=True, header="MUC LUC TAI LIEU"),
+        29: _sig(
+            29,
+            header="TRICH BIEN BAN HOP CHI BO",
+            full="xet chuyen dang chinh thuc",
+        ),
+        33: _sig(
+            33,
+            header="BIEN BAN HAP TO CTANG",
+            full="xet de nghi chuyen dang chinh thuc",
+        ),
+        83: _sig(
+            83,
+            header="Mu IV. y kin nhan xet noi cu tru BIEN BAN",
+            full="to truong dan pho noi cua",
+        ),
+    }
+    groups, orphans, n = promote_orphans_to_groups(
+        [], [35, 36, 37], signals
+    )
+    assert n >= 3
+    assert groups[0].doc_type == "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"
+    assert groups[0].page_numbers == [35, 36, 37]
+
+    # Discard mục lục + biên bản thừa + nơi cư trú
+    g_phieu = DocumentGroup(
+        group_id=1,
+        raw_title="p",
+        doc_type="PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        page_numbers=[82, 83, 84],
+        page_size_group="A4_PORTRAIT",
+    )
+    signals[82] = _sig(82, header="PHIEU BO SUNG", full="mau 3")
+    signals[84] = _sig(84, header="muc do tin nhiem", full="y kien")
+    groups2, orphans2, blanks, nd = apply_catalog_discard_policy(
+        [g_phieu] + groups,
+        signals,
+        [20, 29, 33],
+        [],
+    )
+    assert nd >= 4
+    assert 20 in blanks and 29 in blanks and 33 in blanks and 83 in blanks
+    phieu_left = next(
+        (g for g in groups2 if g.doc_type.startswith("PHIEU")), None
+    )
+    if phieu_left:
+        assert 83 not in phieu_left.page_numbers
+    tt49 = next(
+        g
+        for g in groups2
+        if g.doc_type == "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"
+    )
+    assert tt49.page_numbers == [35, 36, 37]
+
+    # QĐ lương discard
+    assert looks_like_luong_quyet_dinh(
+        "QUYET DINH V VIC CHUYN XP LUONG",
+        "muc luong ti thi diem",
+    )
+    g_luong = DocumentGroup(
+        group_id=9,
+        raw_title="luong",
+        doc_type="CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM",
+        page_numbers=[47, 48],
+        page_size_group="A4_PORTRAIT",
+    )
+    signals[47] = _sig(
+        47,
+        header="QUYET DINH V VIC CHUYN XP LUONG",
+        full="sang luong moi",
+    )
+    signals[48] = _sig(48, header="DIEU 2 TIN LUONG MOI", full="muc luong")
+    _, _, blanks_l, nd_l = apply_catalog_discard_policy(
+        [g_luong], signals, [], []
+    )
+    assert nd_l >= 2
+    assert 47 in blanks_l and 48 in blanks_l
+    print("  OK  v11_gemini_catalog_policy")
 
 
 def test_force_phieu_xin_y_kien_out_of_kiem_diem() -> None:
@@ -1468,6 +1580,7 @@ def main() -> int:
         test_jammed_ocr_kiem_diem_and_refine_khac,
         test_eject_minutes_from_khac,
         test_v10_classify_remaining_pages,
+        test_v11_gemini_catalog_policy,
         test_force_phieu_xin_y_kien_out_of_kiem_diem,
         test_y_kien_does_not_swallow_kiem_diem,
         test_scrub_kiem_diem_out_of_y_kien,

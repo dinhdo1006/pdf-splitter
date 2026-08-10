@@ -217,6 +217,86 @@ def looks_like_noi_cu_tru_form_section(header: str, full_text: str = "") -> bool
     )
 
 
+def looks_like_hop_chi_doan_y_kien_du_bi(header: str, full_text: str = "") -> bool:
+    """
+    Họp chi đoàn xét ĐV dự bị → TT 49 (tổng hợp ý kiến đoàn thể).
+    Khác biên bản chi bộ / tổ đảng / nơi cư trú hằng năm.
+    """
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:900]).lower()
+    compact = re.sub(r"[\s\-_\.]+", "", blob)
+    has_doan = (
+        "hop chi doan" in blob
+        or "hop chi-doan" in blob
+        or "hopchidoan" in compact
+    )
+    if not has_doan:
+        return False
+    has_du_bi = (
+        "du bi" in blob
+        or "dubi" in compact
+        or "dy bi" in blob
+        or "dang vie du bi" in blob
+        or "dang vien du bi" in blob
+    )
+    return has_du_bi or "chinh thuc" in blob
+
+
+def looks_like_luong_quyet_dinh(header: str, full_text: str = "") -> bool:
+    """Quyết định lương / nâng bậc / chuyển xếp lương — không có trong Phụ lục 1."""
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:700]).lower()
+    hints = (
+        "nang luong",
+        "nang bac luong",
+        "chuyen xep luong",
+        "chuyen xp luong",
+        "xep luong",
+        "muc luong",
+        "tien luong moi",
+        "luong moi",
+        "nang bc luong",
+        "chuyn xp luong",
+        "chuyenxp luong",
+    )
+    if any(h in blob for h in hints):
+        return True
+    compact = re.sub(r"[\s\-_\.]+", "", blob)
+    return any(
+        x in compact
+        for x in (
+            "nangluong",
+            "chuyenxpluong",
+            "chuyenxepluong",
+            "chuynxpluong",
+            "xpluong",
+        )
+    )
+
+
+def is_out_of_catalog_discard(
+    header: str,
+    full_text: str = "",
+    *,
+    is_toc: bool = False,
+) -> bool:
+    """
+    Trang ngoài Phụ lục 1 — loại bỏ (không export success/orphan review).
+    Giữ TT 49: họp chi đoàn ý kiến ĐV dự bị.
+    """
+    if is_toc:
+        return True
+    if looks_like_hop_chi_doan_y_kien_du_bi(header, full_text):
+        return False
+    if looks_like_ban_giao_listing(header, full_text):
+        return True
+    if looks_like_noi_cu_tru_form_section(header, full_text):
+        return True
+    if looks_like_luong_quyet_dinh(header, full_text):
+        return True
+    if looks_like_standalone_minutes(header, full_text):
+        return True
+    return False
+
+
 def looks_like_van_bang_chung_chi(header: str, full_text: str = "") -> bool:
     """Văn bằng / chứng chỉ tốt nghiệp / chứng thực (không phải LLCT)."""
     blob = unidecode((header or "") + "\n" + (full_text or "")[:600]).lower()
@@ -480,8 +560,10 @@ def should_force_new_document(
         if looks_like_standalone_minutes(curr_header, curr_full):
             return True, "kiem_diem_to_minutes"
 
-    # Phiếu xin ý kiến / tổng hợp ý kiến: thường 1 trang — tách khi gặp kiểm điểm/phiếu/QĐ
-    if open_t.startswith("TONG_HOP_Y_KIEN") or open_t.endswith("Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"):
+    # Phiếu xin ý kiến: thường 1 trang. Họp chi đoàn (TT 49 nhiều trang) gắn qua promote orphan.
+    if open_t.startswith("TONG_HOP_Y_KIEN") or open_t.endswith(
+        "Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"
+    ):
         if looks_like_kiem_diem_header(curr_header, curr_full) or curr_t.startswith(
             "BAN_TU_KIEM"
         ):
@@ -497,7 +579,6 @@ def should_force_new_document(
         if open_page_count >= 1 and curr_t and curr_t != open_t:
             return True, "y_kien_type_change"
         if open_page_count >= 1:
-            # Mặc định 1 phiếu xin ý kiến / 1 file
             return True, "y_kien_single_page"
 
     # Quyết định: số QĐ khác hoặc đã có trang + match QĐ mới

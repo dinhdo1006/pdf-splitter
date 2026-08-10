@@ -612,7 +612,7 @@ def main() -> int:
     except Exception as rex:
         logger.error(f"Refine unknown types failed: {rex}")
 
-    # Pass lại reattach/promote sau eject/scrub (QĐ tiếp, phiếu nơi cư trú, văn bằng)
+    # Pass lại reattach/promote sau eject/scrub (QĐ tiếp, văn bằng, TT 49)
     try:
         from pipeline.orphan_reattacher import promote_orphans_to_groups, reattach_orphans
 
@@ -626,6 +626,21 @@ def main() -> int:
             logger.info(f"Second-pass promoted {n_prom2} orphan pages → groups")
     except Exception as rex:
         logger.error(f"Second-pass reattach/promote failed: {rex}")
+
+    # Loại trang ngoài Phụ lục 1 (mục lục, biên bản thừa, nơi cư trú, QĐ lương)
+    try:
+        from pipeline.page_audit import apply_catalog_discard_policy
+
+        groups, orphan_pages, blank_pages, n_disc = apply_catalog_discard_policy(
+            groups, all_signals, orphan_pages, blank_pages
+        )
+        if n_disc:
+            logger.info(
+                f"Discarded {n_disc} out-of-catalog pages → blank "
+                f"({len(orphan_pages)} orphans, {len(blank_pages)} blanks)"
+            )
+    except Exception as dex:
+        logger.error(f"Catalog discard policy failed: {dex}")
 
     # Audit đủ trang trước export
     page_audit_report: dict = {}

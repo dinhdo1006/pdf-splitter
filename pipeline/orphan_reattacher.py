@@ -216,6 +216,7 @@ def _judge_orphan(
         )
 
     # CASE 1b: kẹp giữa hai group cùng loại phiếu (vd. 82|83|84 bị cắt soft-max)
+    # Không gắn nhận xét nơi cư trú hằng năm (ngoài catalog → discard sau)
     if (
         prev_group is not None
         and next_group is not None
@@ -229,6 +230,18 @@ def _judge_orphan(
         }
         and not _looks_like_standalone_minutes(signal)
     ):
+        from pipeline.doc_identity import looks_like_noi_cu_tru_form_section
+
+        h = getattr(signal, "header_text", "") if signal else ""
+        f = getattr(signal, "full_text", "") if signal else ""
+        if looks_like_noi_cu_tru_form_section(h or "", f or ""):
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="noi_cu_tru_annual_discard_later",
+                confidence=1.0,
+            )
         max_soft = soft_max_pages_for(prev_group.doc_type)
         if max_soft is None or len(prev_group.page_numbers) < max_soft:
             return ReattachDecision(
@@ -241,11 +254,22 @@ def _judge_orphan(
 
     # CASE 1c: trang thân Quyết định (Điều 2/danh sách) sau QĐ/CAC_QUYET
     if prev_group is not None and signal is not None:
-        from pipeline.doc_identity import looks_like_qd_body_continuation
+        from pipeline.doc_identity import (
+            looks_like_luong_quyet_dinh,
+            looks_like_qd_body_continuation,
+        )
 
         pt = (prev_group.doc_type or "").upper()
         header = getattr(signal, "header_text", "") or ""
         full = getattr(signal, "full_text", "") or ""
+        if looks_like_luong_quyet_dinh(header, full):
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="luong_qd_discard_later",
+                confidence=1.0,
+            )
         if (
             (pt.startswith("CAC_QUYET_DINH") or pt.startswith("QUYET_DINH"))
             and looks_like_qd_body_continuation(header, full)
@@ -655,7 +679,9 @@ def _infer_orphan_doc_type(signal: PageSignal) -> Optional[str]:
     """Suy loại catalog từ signal orphan (matcher + heuristic)."""
     from pipeline.doc_identity import (
         looks_like_danh_gia_phan_loai,
+        looks_like_hop_chi_doan_y_kien_du_bi,
         looks_like_kiem_diem_header,
+        looks_like_luong_quyet_dinh,
         looks_like_ly_lich_header,
         looks_like_phieu_bo_sung,
         looks_like_phieu_dang_vien,
@@ -666,12 +692,17 @@ def _infer_orphan_doc_type(signal: PageSignal) -> Optional[str]:
     from pipeline.party_doc_matcher import get_matcher
     from pipeline.party_catalog import PARTY_DOC_CATALOG
 
+    header = getattr(signal, "header_text", "") or ""
+    full = getattr(signal, "full_text", "") or ""
+    if looks_like_luong_quyet_dinh(header, full):
+        return None
+    if looks_like_hop_chi_doan_y_kien_du_bi(header, full):
+        return "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"
+
     dtype = (getattr(signal, "matched_doc_type", "") or "").upper()
     if dtype and dtype in PARTY_DOC_CATALOG:
         return dtype
 
-    header = getattr(signal, "header_text", "") or ""
-    full = getattr(signal, "full_text", "") or ""
     size = getattr(signal, "page_size_group", "OTHER") or "OTHER"
     result = get_matcher().match(header, full[:900], page_size_group=size)
     key = (result.doc_type_key or "").upper()
@@ -697,7 +728,6 @@ def _infer_orphan_doc_type(signal: PageSignal) -> Optional[str]:
     if looks_like_qd_body_continuation(header, full):
         return "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
     if looks_like_quyet_dinh_or_nghi_quyet(header, full):
-        # Generic bucket for quyết định điều động / công nhận khi matcher miss
         return "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
     return None
 
@@ -711,6 +741,8 @@ def promote_orphans_to_groups(
     Orphan có loại catalog rõ → mở DocumentGroup mới (chuỗi trang liền kề cùng loại).
     Giảm orphan rate khi soft-max/title miss khiến trang bị cách ly.
     """
+    from pipeline.doc_identity import looks_like_hop_chi_doan_y_kien_du_bi
+
     if not orphan_pages:
         return groups, orphan_pages, 0
 
@@ -726,7 +758,11 @@ def promote_orphans_to_groups(
         sig = all_signals.get(pn)
         if sig is None or getattr(sig, "is_toc", False):
             continue
-        if _looks_like_standalone_minutes(sig):
+        header0 = getattr(sig, "header_text", "") or ""
+        full0 = getattr(sig, "full_text", "") or ""
+        is_chi_doan = looks_like_hop_chi_doan_y_kien_du_bi(header0, full0)
+        # Biên bản thường bỏ; trừ họp chi đoàn ĐV dự bị (TT 49)
+        if _looks_like_standalone_minutes(sig) and not is_chi_doan:
             continue
         dtype = _infer_orphan_doc_type(sig)
         if not dtype:
@@ -739,14 +775,15 @@ def promote_orphans_to_groups(
             sig_n = all_signals.get(cur)
             if sig_n is None or getattr(sig_n, "is_toc", False):
                 break
-            if _looks_like_standalone_minutes(sig_n):
+            # Chuỗi TT 49: cho phép trang giữa biên bản họp
+            if _looks_like_standalone_minutes(sig_n) and not (
+                dtype == "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"
+            ):
                 break
             dtype_n = _infer_orphan_doc_type(sig_n)
-            # Tiếp tục chuỗi nếu cùng loại hoặc chưa nhận loại (mid-page)
             if dtype_n and dtype_n != dtype:
                 break
             if dtype_n is None:
-                # mid-page: chỉ nối nếu density ổn và chưa chạm soft-max
                 max_soft = soft_max_pages_for(dtype)
                 if max_soft is not None and len(chain) >= max_soft:
                     break
