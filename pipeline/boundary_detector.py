@@ -29,6 +29,7 @@ from pipeline.continuation_validator import (
 from pipeline.doc_identity import (
     extract_decision_ref,
     is_quyet_dinh_type,
+    looks_like_ke_khai_tai_san,
     looks_like_kiem_diem_header,
     looks_like_ly_lich_header,
     looks_like_phieu_bo_sung,
@@ -350,11 +351,42 @@ class BoundaryDetector:
                         PageClass.NEW_DOCUMENT,
                         f"new[split_kiem_diem] | {score_reason}",
                     )
+                # Sau kiểm điểm: phiếu / kê khai tài sản → NEW phiếu, không copy BAN
+                if last_t.startswith("BAN_TU_KIEM") and (
+                    looks_like_phieu_bo_sung(h, f)
+                    or looks_like_ke_khai_tai_san(h, f)
+                    or looks_like_phieu_dang_vien(h, f)
+                ):
+                    if looks_like_phieu_dang_vien(h, f):
+                        signal.matched_doc_type = "PHIEU_DANG_VIEN"
+                    else:
+                        signal.matched_doc_type = "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
+                    signal.has_doc_keyword = True
+                    self._open_new_group(
+                        signal,
+                        score,
+                        f"split_phieu_after_kiem_diem|{score_reason}",
+                    )
+                    return (
+                        PageClass.NEW_DOCUMENT,
+                        f"new[split_phieu_after_kd] | {score_reason}",
+                    )
                 if looks_like_quyet_dinh_or_nghi_quyet(h, f):
                     self._mark_orphan(signal, f"quyet_dinh_after_soft_max|{last_t}")
                     return (
                         PageClass.ORPHAN_PAGE,
                         f"orphan[quyet_dinh_after_form] | {score_reason}",
+                    )
+                # Không copy loại BAN sang mid-page không có tín hiệu kiểm điểm
+                if last_t.startswith("BAN_TU_KIEM") and not looks_like_kiem_diem_header(
+                    h, f
+                ):
+                    self._mark_orphan(
+                        signal, f"no_copy_ban_type_onto_mid|{score_reason}"
+                    )
+                    return (
+                        PageClass.ORPHAN_PAGE,
+                        f"orphan[no_copy_ban] | {score_reason}",
                     )
                 same_size = (
                     signal.page_size_group == last.page_size_group
@@ -692,6 +724,13 @@ class BoundaryDetector:
                         signal.header_text, signal.full_text or ""
                     ):
                         signal.matched_doc_type = "BAN_TU_KIEM_DIEM_HANG_NAM"
+                        signal.has_doc_keyword = True
+                    elif looks_like_phieu_bo_sung(
+                        signal.header_text, signal.full_text or ""
+                    ) or looks_like_ke_khai_tai_san(
+                        signal.header_text, signal.full_text or ""
+                    ):
+                        signal.matched_doc_type = "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
                         signal.has_doc_keyword = True
                     elif looks_like_phieu_dang_vien(
                         signal.header_text, signal.full_text or ""

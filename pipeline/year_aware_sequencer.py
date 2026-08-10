@@ -115,7 +115,7 @@ def extract_year_robust(text: str) -> Optional[int]:
         return None
 
     fixed = _apply_ocr_fixup(text)
-    # Che cụm ngày sinh để không lấy DOB làm năm văn bản
+    # Che cụm ngày sinh / OCR méo "sinb yay" để không lấy DOB làm năm văn bản
     fixed_no_dob = re.sub(
         r"(?:ng[àa]y\s*)?sinh(?:\s*ng[àa]y)?\s*[:\.]?\s*"
         r"(?:\d{1,2}\s*)?[/\-\.]?(?:\d{1,2}\s*)?[/\-\.]?\d{0,4}",
@@ -128,6 +128,18 @@ def extract_year_robust(text: str) -> Optional[int]:
         " ",
         fixed_no_dob,
         flags=re.IGNORECASE,
+    )
+    # OCR méo: "Sinb yay: 26/03/1966" hoặc dòng DOB rồi "Sinb yay"
+    fixed_no_dob = re.sub(
+        r"sinb\s*yay\s*[:\.]?",
+        " ",
+        fixed_no_dob,
+        flags=re.IGNORECASE,
+    )
+    fixed_no_dob = re.sub(
+        r"(?:^|\n)\s*\d{1,2}[/\-\.]\d{1,2}[/\-\.](19\d{2})\s*(?:\n|$)",
+        "\n",
+        fixed_no_dob,
     )
 
     # Pattern 1 — "năm 2024" / "nam 2024"

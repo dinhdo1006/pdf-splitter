@@ -1038,6 +1038,89 @@ def test_force_phieu_to_kiem_diem_without_catalog() -> None:
     print("  OK  force_phieu_to_kiem_diem_without_catalog")
 
 
+def test_kiem_diem_does_not_swallow_ke_khai_tai_san() -> None:
+    """Kiểm điểm không nuốt Bản kê khai tài sản / phiếu bổ sung."""
+    from pipeline.doc_identity import should_force_new_document
+
+    force, reason = should_force_new_document(
+        "BAN_TU_KIEM_DIEM_HANG_NAM",
+        2017,
+        None,
+        5,
+        None,
+        "BAN KE KHAI TAI SAN, THU NHAP\nNAM 2017",
+        "Nguoi ke khai tai san",
+    )
+    assert force and "phieu" in reason, (force, reason)
+
+    det = BoundaryDetector()
+    for i in range(1, 6):
+        det.process_page(
+            _sig(
+                i,
+                size="A4_PORTRAIT",
+                matched="BAN_TU_KIEM_DIEM_HANG_NAM",
+                header="BAN KIEM DIEM DANG VIEN NAM 2017",
+                full="tu kiem diem",
+            )
+        )
+    d6 = det.process_page(
+        _sig(
+            6,
+            size="A4_PORTRAIT",
+            header="BAN KE KHAI TAI SAN, THU NHAP NAM 2017",
+            full="Nguoi ke khai tai san: Pham Huu Luat",
+            score=0.2,
+        )
+    )
+    assert d6.page_class == PageClass.NEW_DOCUMENT, d6.reasoning
+    groups, _ = det.finalize()
+    kd = next(g for g in groups if g.doc_type.startswith("BAN_TU_KIEM"))
+    assert 6 not in kd.page_numbers
+    assert any(
+        g.doc_type == "PHIEU_BO_SUNG_HO_SO_DANG_VIEN" and 6 in g.page_numbers
+        for g in groups
+    ), [(g.doc_type, g.page_numbers) for g in groups]
+    print("  OK  kiem_diem_does_not_swallow_ke_khai_tai_san")
+
+
+def test_scrub_ke_khai_out_of_kiem_diem() -> None:
+    from pipeline.page_audit import scrub_mismatched_form_pages
+
+    g = DocumentGroup(
+        group_id=1,
+        raw_title="KD",
+        doc_type="BAN_TU_KIEM_DIEM_HANG_NAM",
+        page_numbers=[155, 156, 160, 161],
+        page_size_group="A4_PORTRAIT",
+    )
+    signals = {
+        155: _sig(
+            155,
+            header="BAN KIEM DIEM DANG VIEN NAM 2017",
+            full="a",
+            size="A4_PORTRAIT",
+        ),
+        156: _sig(156, header="tac phong", full="b", size="A4_PORTRAIT"),
+        160: _sig(
+            160,
+            header="BAN KE KHAI TAI SAN, THU NHAP NAM 2017",
+            full="Nguoi ke khai",
+            size="A4_PORTRAIT",
+        ),
+        161: _sig(161, header="Nha o", full="gia tri", size="A4_PORTRAIT"),
+    }
+    groups, n = scrub_mismatched_form_pages([g], signals)
+    assert n >= 1
+    kd = next(g for g in groups if g.doc_type.startswith("BAN_TU_KIEM"))
+    assert 160 not in kd.page_numbers and 161 not in kd.page_numbers
+    assert any(
+        g.doc_type == "PHIEU_BO_SUNG_HO_SO_DANG_VIEN" and 160 in g.page_numbers
+        for g in groups
+    )
+    print("  OK  scrub_ke_khai_out_of_kiem_diem")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -1086,6 +1169,8 @@ def main() -> int:
         test_soft_max_does_not_copy_phieu_onto_kiem_diem,
         test_year_ignores_ngay_sinh,
         test_force_phieu_to_kiem_diem_without_catalog,
+        test_kiem_diem_does_not_swallow_ke_khai_tai_san,
+        test_scrub_ke_khai_out_of_kiem_diem,
     ]
     failed = 0
     for t in tests:

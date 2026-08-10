@@ -43,8 +43,28 @@ def extract_decision_ref(text: str) -> Optional[str]:
     return None
 
 
+def looks_like_ke_khai_tai_san(header: str, full_text: str = "") -> bool:
+    """Bản kê khai tài sản / thu nhập — thường đi cùng phiếu, không thuộc kiểm điểm."""
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:350]).lower()
+    return any(
+        x in blob
+        for x in (
+            "ban ke khai tai san",
+            "ke khai tai san",
+            "ke khai tai sn",
+            "tai san, thu nhap",
+            "tai san thu nhap",
+            "giai trinh su bien dong",
+            "giai trinh bien dong",
+            "nguoi ke khai tai",
+        )
+    )
+
+
 def looks_like_phieu_bo_sung(header: str, full_text: str = "") -> bool:
     blob = unidecode((header or "") + "\n" + (full_text or "")[:400]).lower()
+    if looks_like_ke_khai_tai_san(header, full_text):
+        return True
     return any(
         x in blob
         for x in (
@@ -53,8 +73,11 @@ def looks_like_phieu_bo_sung(header: str, full_text: str = "") -> bool:
             "mau 3",
             "mau 3-hsdv",
             "mau 3 hsdv",
+            "mau 3a",
             "mu 3 hsdv",
             "mu 3-hsdv",
+            "mu 3 - hsdv",
+            "mu 3a",
         )
     )
 
@@ -275,8 +298,12 @@ def should_force_new_document(
                 curr_header, curr_full
             ):
                 return True, "kiem_diem_new_form_header"
-        if looks_like_phieu_bo_sung(curr_header, curr_full):
+        if looks_like_phieu_bo_sung(curr_header, curr_full) or looks_like_ke_khai_tai_san(
+            curr_header, curr_full
+        ):
             return True, "kiem_diem_to_phieu_bo_sung"
+        if looks_like_phieu_dang_vien(curr_header, curr_full):
+            return True, "kiem_diem_to_phieu_dang_vien"
         if looks_like_standalone_minutes(curr_header, curr_full):
             return True, "kiem_diem_to_minutes"
 

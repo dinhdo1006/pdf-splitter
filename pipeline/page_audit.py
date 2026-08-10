@@ -66,6 +66,7 @@ def scrub_mismatched_form_pages(
         looks_like_kiem_diem_header,
         looks_like_phieu_bo_sung,
         looks_like_phieu_dang_vien,
+        looks_like_ke_khai_tai_san,
         looks_like_quyet_dinh_or_nghi_quyet,
     )
 
@@ -75,6 +76,10 @@ def scrub_mismatched_form_pages(
         "",
         "PHIEU_DANG_VIEN",
         "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        "BAN_TU_KIEM_DIEM_HANG_NAM",
+        "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI",
+        "BAN_TU_KIEM_DIEM_TAI_THOI_DIEM_CHUYEN",
+        "BAN_TU_KIEM_DIEM_DANG_VIEN_VI_PHAM",
     }
 
     def _strong_kiem_diem(header: str, full: str) -> bool:
@@ -93,11 +98,27 @@ def scrub_mismatched_form_pages(
             )
         )
 
+    def _strong_phieu(header: str, full: str) -> bool:
+        return looks_like_phieu_bo_sung(header, full) or looks_like_ke_khai_tai_san(
+            header, full
+        ) or looks_like_phieu_dang_vien(header, full)
+
     def _foreign_type(host: str, header: str, full: str) -> str | None:
         host_u = (host or "").upper()
-        if host_u not in peel_hosts and not host_u.startswith("PHIEU"):
+        if host_u not in peel_hosts and not host_u.startswith("PHIEU") and not host_u.startswith(
+            "BAN_TU_KIEM"
+        ):
             return None
-        # Phiếu → chỉ peel kiểm điểm header mạnh (không dùng soft hints)
+        # Kiểm điểm → peel phiếu / kê khai tài sản
+        if host_u.startswith("BAN_TU_KIEM"):
+            if looks_like_phieu_dang_vien(header, full):
+                return "PHIEU_DANG_VIEN"
+            if looks_like_phieu_bo_sung(header, full) or looks_like_ke_khai_tai_san(
+                header, full
+            ):
+                return "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
+            return None
+        # Phiếu → chỉ peel kiểm điểm header mạnh
         if host_u.startswith("PHIEU"):
             if _strong_kiem_diem(header, full):
                 return "BAN_TU_KIEM_DIEM_HANG_NAM"

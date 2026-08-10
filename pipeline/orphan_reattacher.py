@@ -495,7 +495,10 @@ def absorb_trailing_orphans_after_capped_forms(
             continue
         # Không bắt đầu chuỗi phiếu bằng header kiểm điểm / QĐ
         from pipeline.doc_identity import (
+            looks_like_ke_khai_tai_san,
             looks_like_kiem_diem_header,
+            looks_like_phieu_bo_sung,
+            looks_like_phieu_dang_vien,
             looks_like_quyet_dinh_or_nghi_quyet,
         )
 
@@ -504,6 +507,12 @@ def absorb_trailing_orphans_after_capped_forms(
         if dtype.startswith("PHIEU") and (
             looks_like_kiem_diem_header(h0, f0)
             or looks_like_quyet_dinh_or_nghi_quyet(h0, f0)
+        ):
+            continue
+        if dtype.startswith("BAN_TU_KIEM") and (
+            looks_like_phieu_bo_sung(h0, f0)
+            or looks_like_ke_khai_tai_san(h0, f0)
+            or looks_like_phieu_dang_vien(h0, f0)
         ):
             continue
 
@@ -521,6 +530,12 @@ def absorb_trailing_orphans_after_capped_forms(
             if dtype.startswith("PHIEU") and (
                 looks_like_kiem_diem_header(hn, fn)
                 or looks_like_quyet_dinh_or_nghi_quyet(hn, fn)
+            ):
+                break
+            if dtype.startswith("BAN_TU_KIEM") and (
+                looks_like_phieu_bo_sung(hn, fn)
+                or looks_like_ke_khai_tai_san(hn, fn)
+                or looks_like_phieu_dang_vien(hn, fn)
             ):
                 break
             inferred_n = _infer_orphan_doc_type(sig_n)
