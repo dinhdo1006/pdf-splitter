@@ -354,6 +354,26 @@ def should_force_new_document(
         if looks_like_standalone_minutes(curr_header, curr_full):
             return True, "kiem_diem_to_minutes"
 
+    # Phiếu xin ý kiến / tổng hợp ý kiến: thường 1 trang — tách khi gặp kiểm điểm/phiếu/QĐ
+    if open_t.startswith("TONG_HOP_Y_KIEN") or open_t.endswith("Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"):
+        if looks_like_kiem_diem_header(curr_header, curr_full) or curr_t.startswith(
+            "BAN_TU_KIEM"
+        ):
+            return True, "y_kien_to_kiem_diem"
+        if looks_like_phieu_bo_sung(curr_header, curr_full) or looks_like_ke_khai_tai_san(
+            curr_header, curr_full
+        ):
+            return True, "y_kien_to_phieu_bo_sung"
+        if looks_like_phieu_xin_y_kien(curr_header, curr_full) and open_page_count >= 1:
+            return True, "y_kien_new_form"
+        if looks_like_quyet_dinh_or_nghi_quyet(curr_header, curr_full):
+            return True, "y_kien_to_quyet_dinh"
+        if open_page_count >= 1 and curr_t and curr_t != open_t:
+            return True, "y_kien_type_change"
+        if open_page_count >= 1:
+            # Mặc định 1 phiếu xin ý kiến / 1 file
+            return True, "y_kien_single_page"
+
     # Quyết định: số QĐ khác hoặc đã có trang + match QĐ mới
     if is_quyet_dinh_type(open_t) and is_quyet_dinh_type(curr_t):
         if open_ref and curr_ref and open_ref != curr_ref:

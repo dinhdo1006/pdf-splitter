@@ -1188,6 +1188,102 @@ def test_force_phieu_xin_y_kien_out_of_kiem_diem() -> None:
     print("  OK  force_phieu_xin_y_kien_out_of_kiem_diem")
 
 
+def test_y_kien_does_not_swallow_kiem_diem() -> None:
+    """Phiếu xin ý kiến 1 trang; trang sau BAN KIEM DIEM → NEW kiểm điểm."""
+    from pipeline.doc_identity import should_force_new_document
+
+    force, reason = should_force_new_document(
+        "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI",
+        2011,
+        None,
+        1,
+        None,
+        "BAN KIEM DIEM TR PHE BINH",
+        "Ha Noi, ngay 15 thang 11 nam 2012",
+    )
+    assert force, (force, reason)
+
+    det = BoundaryDetector()
+    det.process_page(
+        _sig(
+            121,
+            size="A4_PORTRAIT",
+            matched="TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI",
+            header="PHIEU XIN Y KIEN CHI UY",
+            full="Nam 2011",
+        )
+    )
+    d122 = det.process_page(
+        _sig(
+            122,
+            size="A4_PORTRAIT",
+            header="BAN KIEM DIEM TR PHE BINH VA PHE BINH",
+            full="Ha Noi ngay 15 thang 11 nam 2012",
+            score=0.2,
+        )
+    )
+    assert d122.page_class == PageClass.NEW_DOCUMENT, d122.reasoning
+    for pn in (123, 124, 125, 126):
+        det.process_page(
+            _sig(
+                pn,
+                size="A4_PORTRAIT",
+                header="1.2 Ban than kiem diem",
+                full="noi dung kiem diem tiep",
+                score=0.1,
+            )
+        )
+    groups, orphans = det.finalize()
+    yk = [g for g in groups if g.doc_type.startswith("TONG_HOP")]
+    kd = [g for g in groups if g.doc_type.startswith("BAN_TU_KIEM")]
+    assert yk and yk[0].page_numbers == [121], yk
+    assert kd and 122 in kd[0].page_numbers
+    assert all(p in kd[0].page_numbers for p in (123, 124, 125, 126)) or (
+        122 in kd[0].page_numbers and not any(p in orphans for p in (122,))
+    ), ([(g.doc_type, g.page_numbers) for g in groups], orphans)
+    print("  OK  y_kien_does_not_swallow_kiem_diem")
+
+
+def test_scrub_kiem_diem_out_of_y_kien() -> None:
+    from pipeline.page_audit import scrub_mismatched_form_pages
+
+    g = DocumentGroup(
+        group_id=1,
+        raw_title="yk",
+        doc_type="TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI",
+        page_numbers=[121, 122, 123],
+        page_size_group="A4_PORTRAIT",
+    )
+    signals = {
+        121: _sig(121, header="PHIEU XIN Y KIEN", full="a", size="A4_PORTRAIT"),
+        122: _sig(
+            122,
+            header="BAN KIEM DIEM TR PHE BINH",
+            full="nam 2012",
+            size="A4_PORTRAIT",
+        ),
+        123: _sig(123, header="1.2 Ban than", full="kiem diem", size="A4_PORTRAIT"),
+    }
+    groups, n = scrub_mismatched_form_pages([g], signals)
+    assert n >= 1
+    yk = next(g for g in groups if g.doc_type.startswith("TONG_HOP"))
+    assert yk.page_numbers == [121]
+    kd = next(g for g in groups if g.doc_type.startswith("BAN_TU_KIEM"))
+    assert 122 in kd.page_numbers and 123 in kd.page_numbers
+    print("  OK  scrub_kiem_diem_out_of_y_kien")
+
+
+def test_year_ignores_sink_1gay_dob() -> None:
+    from pipeline.year_aware_sequencer import extract_year_robust
+
+    y = extract_year_robust(
+        "BAN TU KIEN AIEN DANG VIEN\nSINK 1GAY : 26/03/1966\nNgay vao dang: 04/10/1993"
+    )
+    assert y != 1966, y
+    assert y in (1993, None) or (y is not None and y >= 1990), y
+    print("  OK  year_ignores_sink_1gay_dob")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -1241,6 +1337,9 @@ def main() -> int:
         test_jammed_ocr_kiem_diem_and_refine_khac,
         test_eject_minutes_from_khac,
         test_force_phieu_xin_y_kien_out_of_kiem_diem,
+        test_y_kien_does_not_swallow_kiem_diem,
+        test_scrub_kiem_diem_out_of_y_kien,
+        test_year_ignores_sink_1gay_dob,
     ]
     failed = 0
     for t in tests:

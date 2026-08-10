@@ -81,6 +81,8 @@ def scrub_mismatched_form_pages(
         "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI",
         "BAN_TU_KIEM_DIEM_TAI_THOI_DIEM_CHUYEN",
         "BAN_TU_KIEM_DIEM_DANG_VIEN_VI_PHAM",
+        "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI",
+        "TONG_HOP_Y_KIEN_NHAN_XET_NGUOI_VAO_DANG",
     }
 
     def _strong_kiem_diem(header: str, full: str) -> bool:
@@ -113,7 +115,18 @@ def scrub_mismatched_form_pages(
         host_u = (host or "").upper()
         if host_u not in peel_hosts and not host_u.startswith("PHIEU") and not host_u.startswith(
             "BAN_TU_KIEM"
-        ):
+        ) and not host_u.startswith("TONG_HOP_Y_KIEN"):
+            return None
+        # Phiếu xin ý kiến → peel kiểm điểm (không nuốt BAN KIEM DIEM năm sau)
+        if host_u.startswith("TONG_HOP_Y_KIEN"):
+            if _strong_kiem_diem(header, full) or looks_like_kiem_diem_header(
+                header, full
+            ):
+                return "BAN_TU_KIEM_DIEM_HANG_NAM"
+            if looks_like_phieu_bo_sung(header, full) or looks_like_ke_khai_tai_san(
+                header, full
+            ):
+                return "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
             return None
         # Kiểm điểm → peel phiếu / kê khai tài sản / phiếu xin ý kiến
         if host_u.startswith("BAN_TU_KIEM"):
@@ -128,12 +141,8 @@ def scrub_mismatched_form_pages(
             return None
         # Phiếu → chỉ peel kiểm điểm header mạnh
         if host_u.startswith("PHIEU"):
-            if _strong_kiem_diem(header, full) or looks_like_kiem_diem_header(
-                header, full
-            ):
-                # Chỉ peel khi header mạnh / compact OCR, tránh mid-page
-                if _strong_kiem_diem(header, full):
-                    return "BAN_TU_KIEM_DIEM_HANG_NAM"
+            if _strong_kiem_diem(header, full):
+                return "BAN_TU_KIEM_DIEM_HANG_NAM"
             return None
         # CHUA / LL
         if looks_like_phieu_bo_sung(header, full) and "PHIEU_BO_SUNG" not in host_u:
@@ -144,7 +153,6 @@ def scrub_mismatched_form_pages(
             _strong_kiem_diem(header, full)
             or looks_like_kiem_diem_header(header, full)
         ) and not host_u.startswith("BAN_TU_KIEM"):
-            # Trên CHUA/LL: nhận cả OCR dính chữ
             if host_u in ll_types or host_u in {"CHUA_XAC_DINH", ""}:
                 return "BAN_TU_KIEM_DIEM_HANG_NAM"
         if looks_like_quyet_dinh_or_nghi_quyet(header, full) and host_u in (

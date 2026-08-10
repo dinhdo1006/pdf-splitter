@@ -52,6 +52,8 @@ DOC_TYPE_SOFT_MAX_PAGES = {
     "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI": 8,
     "BAN_TU_KIEM_DIEM_TAI_THOI_DIEM_CHUYEN": 8,
     "BAN_TU_KIEM_DIEM_DANG_VIEN_VI_PHAM": 8,
+    "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI": 1,
+    "TONG_HOP_Y_KIEN_NHAN_XET_NGUOI_VAO_DANG": 1,
 }
 
 # Post-pass: gộp lại nhóm cùng loại + cùng năm + trang liền (sau soft-max cắt)

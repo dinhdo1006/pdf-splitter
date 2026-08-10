@@ -423,6 +423,30 @@ def _judge_orphan(
         and not is_quyet_dinh_type(prev_group.doc_type)
         and not _looks_like_standalone_minutes(signal)
     ):
+        prev_t = (prev_group.doc_type or "").upper()
+        # Không gắn tiếp vào phiếu xin ý kiến (1 trang)
+        if prev_t.startswith("TONG_HOP_Y_KIEN"):
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="no_reattach_into_y_kien",
+                confidence=1.0,
+            )
+        from pipeline.doc_identity import looks_like_kiem_diem_header
+
+        header = getattr(signal, "header_text", "") or ""
+        full = getattr(signal, "full_text", "") or ""
+        if looks_like_kiem_diem_header(header, full) and not prev_t.startswith(
+            "BAN_TU_KIEM"
+        ):
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="kiem_diem_not_into_size_prev",
+                confidence=1.0,
+            )
         max_soft = soft_max_pages_for(prev_group.doc_type)
         if max_soft is not None and len(prev_group.page_numbers) >= max_soft:
             return ReattachDecision(
