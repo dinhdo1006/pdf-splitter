@@ -1121,6 +1121,73 @@ def test_scrub_ke_khai_out_of_kiem_diem() -> None:
     print("  OK  scrub_ke_khai_out_of_kiem_diem")
 
 
+def test_jammed_ocr_kiem_diem_and_refine_khac() -> None:
+    from pipeline.doc_identity import looks_like_kiem_diem_header
+    from pipeline.party_doc_matcher import refine_unknown_group_types
+
+    assert looks_like_kiem_diem_header("BANKIEMDIEM\nDANGVIEN", "")
+    assert looks_like_kiem_diem_header("BAN TU KIEN AIEN DANG VIEN NAM1998", "")
+
+    g = DocumentGroup(
+        group_id=12,
+        raw_title="khac",
+        doc_type="CHUA_XAC_DINH",
+        page_numbers=[60, 61, 62],
+        page_size_group="A4_PORTRAIT",
+    )
+    signals = {
+        60: _sig(60, header="BANKIEMDIEM DANGVIEN", full="Pham Huu Luat"),
+        61: _sig(61, header="chuyen mon", full="hoc tap"),
+        62: _sig(62, header="tiep", full="phe binh"),
+    }
+    n = refine_unknown_group_types([g], signals)
+    assert n >= 1
+    assert g.doc_type == "BAN_TU_KIEM_DIEM_HANG_NAM"
+    print("  OK  jammed_ocr_kiem_diem_and_refine_khac")
+
+
+def test_eject_minutes_from_khac() -> None:
+    from pipeline.page_audit import eject_noise_pages_from_unknown
+
+    g = DocumentGroup(
+        group_id=5,
+        raw_title="khac",
+        doc_type="CHUA_XAC_DINH",
+        page_numbers=[32, 33, 34],
+        page_size_group="OTHER",
+    )
+    signals = {
+        32: _sig(32, header="rac", full="xxx"),
+        33: _sig(
+            33,
+            header="BIEN BAN HAP TO CTANG",
+            full="xet de nghi chuyen dang chinh thuc",
+        ),
+        34: _sig(34, header="de nghi", full="dong chi"),
+    }
+    groups, orphans, n = eject_noise_pages_from_unknown([g], signals, [])
+    assert n >= 1
+    assert 33 in orphans
+    assert groups and 33 not in groups[0].page_numbers
+    print("  OK  eject_minutes_from_khac")
+
+
+def test_force_phieu_xin_y_kien_out_of_kiem_diem() -> None:
+    from pipeline.doc_identity import should_force_new_document
+
+    force, reason = should_force_new_document(
+        "BAN_TU_KIEM_DIEM_HANG_NAM",
+        2014,
+        None,
+        5,
+        None,
+        "PHIEU XIN Y KIEN CHI UY",
+        "Kinh gui",
+    )
+    assert force and "phieu_xin" in reason, (force, reason)
+    print("  OK  force_phieu_xin_y_kien_out_of_kiem_diem")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -1171,6 +1238,9 @@ def main() -> int:
         test_force_phieu_to_kiem_diem_without_catalog,
         test_kiem_diem_does_not_swallow_ke_khai_tai_san,
         test_scrub_ke_khai_out_of_kiem_diem,
+        test_jammed_ocr_kiem_diem_and_refine_khac,
+        test_eject_minutes_from_khac,
+        test_force_phieu_xin_y_kien_out_of_kiem_diem,
     ]
     failed = 0
     for t in tests:

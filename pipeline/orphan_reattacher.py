@@ -499,6 +499,7 @@ def absorb_trailing_orphans_after_capped_forms(
             looks_like_kiem_diem_header,
             looks_like_phieu_bo_sung,
             looks_like_phieu_dang_vien,
+            looks_like_phieu_xin_y_kien,
             looks_like_quyet_dinh_or_nghi_quyet,
         )
 
@@ -513,6 +514,7 @@ def absorb_trailing_orphans_after_capped_forms(
             looks_like_phieu_bo_sung(h0, f0)
             or looks_like_ke_khai_tai_san(h0, f0)
             or looks_like_phieu_dang_vien(h0, f0)
+            or looks_like_phieu_xin_y_kien(h0, f0)
         ):
             continue
 
@@ -536,6 +538,7 @@ def absorb_trailing_orphans_after_capped_forms(
                 looks_like_phieu_bo_sung(hn, fn)
                 or looks_like_ke_khai_tai_san(hn, fn)
                 or looks_like_phieu_dang_vien(hn, fn)
+                or looks_like_phieu_xin_y_kien(hn, fn)
             ):
                 break
             inferred_n = _infer_orphan_doc_type(sig_n)
@@ -603,6 +606,10 @@ def _infer_orphan_doc_type(signal: PageSignal) -> Optional[str]:
         return "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
     if looks_like_phieu_dang_vien(header, full):
         return "PHIEU_DANG_VIEN"
+    from pipeline.doc_identity import looks_like_phieu_xin_y_kien
+
+    if looks_like_phieu_xin_y_kien(header, full):
+        return "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"
     if looks_like_kiem_diem_header(header, full):
         return "BAN_TU_KIEM_DIEM_HANG_NAM"
     if looks_like_ly_lich_header(header, full):

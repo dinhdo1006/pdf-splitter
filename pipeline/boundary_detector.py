@@ -737,13 +737,23 @@ class BoundaryDetector:
                     ):
                         signal.matched_doc_type = "PHIEU_DANG_VIEN"
                         signal.has_doc_keyword = True
-                    elif looks_like_quyet_dinh_or_nghi_quyet(
-                        signal.header_text, signal.full_text or ""
-                    ):
-                        signal.matched_doc_type = (
-                            "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
-                        )
-                        signal.has_doc_keyword = True
+                    else:
+                        from pipeline.doc_identity import looks_like_phieu_xin_y_kien
+
+                        if looks_like_phieu_xin_y_kien(
+                            signal.header_text, signal.full_text or ""
+                        ):
+                            signal.matched_doc_type = (
+                                "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"
+                            )
+                            signal.has_doc_keyword = True
+                        elif looks_like_quyet_dinh_or_nghi_quyet(
+                            signal.header_text, signal.full_text or ""
+                        ):
+                            signal.matched_doc_type = (
+                                "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
+                            )
+                            signal.has_doc_keyword = True
 
         # Form nhiều trang: tiêu đề catalog lặp lại trên trang tiếp → không NEW
         # Ngoại lệ: đổi page_size_group (vd. landscape sơ yếu → booklet lý lịch)

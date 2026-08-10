@@ -63,10 +63,11 @@ def scrub_mismatched_form_pages(
     (kiểm điểm / phiếu / QĐ). Không peel mid-page yếu.
     """
     from pipeline.doc_identity import (
+        looks_like_ke_khai_tai_san,
         looks_like_kiem_diem_header,
         looks_like_phieu_bo_sung,
         looks_like_phieu_dang_vien,
-        looks_like_ke_khai_tai_san,
+        looks_like_phieu_xin_y_kien,
         looks_like_quyet_dinh_or_nghi_quyet,
     )
 
@@ -85,8 +86,12 @@ def scrub_mismatched_form_pages(
     def _strong_kiem_diem(header: str, full: str) -> bool:
         """Chỉ header bản kiểm điểm — tránh dính chữ 'kiểm điểm' mid-page."""
         from unidecode import unidecode
+        import re
 
         blob = unidecode((header or "")[:350]).lower()
+        compact = re.sub(r"[\s\-_\.]+", "", blob)
+        if "bankiemdiem" in compact or "bantukiemdiem" in compact:
+            return True
         return any(
             x in blob
             for x in (
@@ -95,6 +100,7 @@ def scrub_mismatched_form_pages(
                 "ban kiem diem dang vien",
                 "ban kiem diem ca nhan",
                 "tu kiem diem hang nam",
+                "ban tu kien aien",
             )
         )
 
@@ -109,7 +115,7 @@ def scrub_mismatched_form_pages(
             "BAN_TU_KIEM"
         ):
             return None
-        # Kiểm điểm → peel phiếu / kê khai tài sản
+        # Kiểm điểm → peel phiếu / kê khai tài sản / phiếu xin ý kiến
         if host_u.startswith("BAN_TU_KIEM"):
             if looks_like_phieu_dang_vien(header, full):
                 return "PHIEU_DANG_VIEN"
@@ -117,22 +123,33 @@ def scrub_mismatched_form_pages(
                 header, full
             ):
                 return "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
+            if looks_like_phieu_xin_y_kien(header, full):
+                return "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"
             return None
         # Phiếu → chỉ peel kiểm điểm header mạnh
         if host_u.startswith("PHIEU"):
-            if _strong_kiem_diem(header, full):
-                return "BAN_TU_KIEM_DIEM_HANG_NAM"
+            if _strong_kiem_diem(header, full) or looks_like_kiem_diem_header(
+                header, full
+            ):
+                # Chỉ peel khi header mạnh / compact OCR, tránh mid-page
+                if _strong_kiem_diem(header, full):
+                    return "BAN_TU_KIEM_DIEM_HANG_NAM"
             return None
+        # CHUA / LL
         if looks_like_phieu_bo_sung(header, full) and "PHIEU_BO_SUNG" not in host_u:
             return "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
         if looks_like_phieu_dang_vien(header, full) and "PHIEU" not in host_u:
             return "PHIEU_DANG_VIEN"
-        if _strong_kiem_diem(header, full) or (
-            host_u in ll_types and looks_like_kiem_diem_header(header, full)
-        ):
-            if not host_u.startswith("BAN_TU_KIEM"):
+        if (
+            _strong_kiem_diem(header, full)
+            or looks_like_kiem_diem_header(header, full)
+        ) and not host_u.startswith("BAN_TU_KIEM"):
+            # Trên CHUA/LL: nhận cả OCR dính chữ
+            if host_u in ll_types or host_u in {"CHUA_XAC_DINH", ""}:
                 return "BAN_TU_KIEM_DIEM_HANG_NAM"
-        if looks_like_quyet_dinh_or_nghi_quyet(header, full) and host_u in ll_types:
+        if looks_like_quyet_dinh_or_nghi_quyet(header, full) and host_u in (
+            ll_types | {"CHUA_XAC_DINH", ""}
+        ):
             return "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
         return None
 
@@ -249,6 +266,53 @@ def scrub_mismatched_form_pages(
             logger.warning(f"[audit] Drop empty group #{g.group_id} after form scrub")
 
     return out, scrubbed
+
+
+def eject_noise_pages_from_unknown(
+    groups: list[DocumentGroup],
+    all_signals: dict[int, PageSignal],
+    orphan_pages: list[int],
+) -> tuple[list[DocumentGroup], list[int], int]:
+    """
+    Đẩy trang biên bản / bàn giao listing ra khỏi nhóm CHUA_XAC_DINH → orphan.
+    Giảm KHAC lẫn tạp; biên bản vẫn review qua orphan label BIEN_BAN.
+    """
+    from pipeline.doc_identity import (
+        looks_like_ban_giao_listing,
+        looks_like_standalone_minutes,
+    )
+
+    orphan_set = set(orphan_pages)
+    ejected = 0
+    kept: list[DocumentGroup] = []
+
+    for g in groups:
+        host = (g.doc_type or "").upper()
+        if host not in {"CHUA_XAC_DINH", ""}:
+            kept.append(g)
+            continue
+        stay: list[int] = []
+        for pn in g.page_numbers:
+            sig = all_signals.get(pn)
+            header = getattr(sig, "header_text", "") if sig else ""
+            full = getattr(sig, "full_text", "") if sig else ""
+            if looks_like_standalone_minutes(header or "", full or "") or (
+                looks_like_ban_giao_listing(header or "", full or "")
+            ):
+                orphan_set.add(pn)
+                ejected += 1
+                logger.warning(
+                    f"[audit] Eject page {pn} from KHAC #{g.group_id} → orphan"
+                )
+            else:
+                stay.append(pn)
+        if stay:
+            g.page_numbers = stay
+            kept.append(g)
+        else:
+            logger.warning(f"[audit] Drop empty KHAC #{g.group_id} after eject")
+
+    return kept, sorted(orphan_set), ejected
 
 
 def merge_adjacent_same_year_groups(

@@ -112,10 +112,23 @@ def looks_like_phieu_dang_vien(header: str, full_text: str = "") -> bool:
 
 def looks_like_kiem_diem_header(header: str, full_text: str = "") -> bool:
     blob = unidecode((header or "") + "\n" + (full_text or "")[:400]).lower()
+    # OCR dính chữ: "BANKIEMDIEM" / "BAN TU KIEN AIEN"
+    compact = re.sub(r"[\s\-_\.]+", "", blob)
+    if any(
+        x in compact
+        for x in (
+            "bankiemdiem",
+            "bantukiemdiem",
+            "bantukienaien",  # OCR méo "ban tu kiem diem"
+            "bankiemdiemdangvien",
+        )
+    ):
+        return True
     return any(
         x in blob
         for x in (
             "ban tu kiem diem",
+            "ban tu kien aien",  # OCR méo
             "tu kiem diem hang nam",
             "kiem diem cuoi nam",
             "tu danh gia kiem diem",
@@ -123,12 +136,43 @@ def looks_like_kiem_diem_header(header: str, full_text: str = "") -> bool:
             "ban kiem diem dang vien",
             "kiem diem dang vien nam",
             "ban kiem diem",
+            "ban kiemdiem",
             "nguoi kiem diem",
+            "nguiri viet kiemdtiem",  # OCR méo cuối bản
             "xep loai dang vien",
             "xp loai dang vien",
             "kiem diem danh gia",
+            "kiem diem dang vie",  # cắt đuôi
         )
     )
+
+
+def looks_like_phieu_xin_y_kien(header: str, full_text: str = "") -> bool:
+    """Phiếu xin ý kiến chi ủy / nơi cư trú — tách khỏi kiểm điểm & QĐ."""
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:400]).lower()
+    if "phieu xin y kien" in blob or "phieu xin ykien" in blob:
+        return True
+    compact = re.sub(r"[\s\-_\.]+", "", blob)
+    return "phieuxinykien" in compact
+
+
+def looks_like_ban_giao_listing(header: str, full_text: str = "") -> bool:
+    """Trang bàn giao / liệt kê tài liệu hồ sơ (không phải form catalog)."""
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:500]).lower()
+    hints = (
+        "quyen ly lich",
+        "1 quyen ly lich",
+        "bien ban hop chi bo",
+        "giay chuyen sinh hoat",
+    )
+    hits = sum(1 for h in hints if h in blob)
+    if hits >= 2:
+        return True
+    if ("gim:" in blob or "giao" in blob) and "ly lich" in blob and (
+        "bien ban" in blob or "phieu" in blob
+    ):
+        return True
+    return False
 
 
 def is_quyet_dinh_type(doc_type: str | None) -> bool:
@@ -176,6 +220,7 @@ def looks_like_quyet_dinh_or_nghi_quyet(header: str, full_text: str = "") -> boo
         "cong nhan dang vien chinh thuc",
         "cong nhan chinh thuc",
         "ve viec chuan y",
+        "chuan y ban thuong vu",
         "qd/tu",
         "qd-tu",
         "qn/db",
@@ -304,6 +349,8 @@ def should_force_new_document(
             return True, "kiem_diem_to_phieu_bo_sung"
         if looks_like_phieu_dang_vien(curr_header, curr_full):
             return True, "kiem_diem_to_phieu_dang_vien"
+        if looks_like_phieu_xin_y_kien(curr_header, curr_full):
+            return True, "kiem_diem_to_phieu_xin_y_kien"
         if looks_like_standalone_minutes(curr_header, curr_full):
             return True, "kiem_diem_to_minutes"
 
@@ -314,5 +361,12 @@ def should_force_new_document(
         if open_page_count >= 1 and curr_t:
             # Mặc định 1 QĐ / 1 file khi trang sau cũng là QĐ catalog
             return True, "quyet_dinh_one_per_file"
+    if is_quyet_dinh_type(open_t) or (open_t or "").upper().startswith("CAC_QUYET"):
+        if looks_like_phieu_xin_y_kien(curr_header, curr_full):
+            return True, "quyet_dinh_to_phieu_xin_y_kien"
+        if looks_like_kiem_diem_header(curr_header, curr_full):
+            return True, "quyet_dinh_to_kiem_diem"
+        if looks_like_phieu_bo_sung(curr_header, curr_full):
+            return True, "quyet_dinh_to_phieu_bo_sung"
 
     return False, ""

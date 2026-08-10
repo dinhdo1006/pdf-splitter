@@ -561,6 +561,21 @@ def main() -> int:
     except Exception as sex:
         logger.error(f"Form scrub failed: {sex}")
 
+    # Đẩy biên bản / listing ra khỏi KHAC → orphan (có label review)
+    try:
+        from pipeline.page_audit import eject_noise_pages_from_unknown
+
+        groups, orphan_pages, n_eject = eject_noise_pages_from_unknown(
+            groups, all_signals, orphan_pages
+        )
+        if n_eject:
+            logger.info(
+                f"Ejected {n_eject} noise pages from KHAC → orphans "
+                f"({len(orphan_pages)} orphans)"
+            )
+    except Exception as eex:
+        logger.error(f"Eject KHAC noise failed: {eex}")
+
     # Post-classify nhóm CHUA_XAC_DINH → catalog nếu match được
     try:
         from pipeline.party_doc_matcher import refine_unknown_group_types

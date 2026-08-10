@@ -99,6 +99,10 @@ _ALIASES: list[tuple[str, str]] = [
     ("ban tu danh gia", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("tu danh gia kiem diem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("ban tu kiem diem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("ban kiem diem dang vien", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("ban kiem diem ca nhan", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("bankiemdiem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("phieu xin y kien", "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"),
     # Nghị quyết / giới thiệu
     ("nghi quyet gioi thieu doan vien", "NGHI_QUYET_GIOI_THIEU_DOAN_VIEN_UU_TU"),
     ("nghi quyet de nghi ket nap", "NGHI_QUYET_DE_NGHI_KET_NAP_CUA_CHI_BO"),
