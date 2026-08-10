@@ -60,12 +60,51 @@ def looks_like_phieu_bo_sung(header: str, full_text: str = "") -> bool:
 
 
 def looks_like_phieu_dang_vien(header: str, full_text: str = "") -> bool:
-    blob = unidecode((header or "") + "\n" + (full_text or "")[:300]).lower()
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:500]).lower()
     if looks_like_phieu_bo_sung(header, full_text):
         return False
+    if any(
+        x in blob
+        for x in (
+            "phieu dang vien",
+            "mau 2-hsdv",
+            "mau 2 hsdv",
+            "mu 2-hsdv",
+            "mu 2 hsdv",
+            "mau 2 - hsdv",
+            "mu 2 -",
+            "mau 2 -",
+            "mau 2-",
+            "mu 2-",
+        )
+    ):
+        return True
+    # OCR méo: "MU 2 - SV" / "PHIEU" + "DANG VIEN" trên cùng trang
+    if ("mau 2" in blob or "mu 2" in blob) and (
+        "phieu" in blob or "dang vien" in blob or "so tdv" in blob or "so the" in blob
+    ):
+        return True
+    return False
+
+
+def looks_like_kiem_diem_header(header: str, full_text: str = "") -> bool:
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:400]).lower()
     return any(
         x in blob
-        for x in ("phieu dang vien", "mau 2", "mu 2", "mau 2-hsdv", "mu 2-hsdv")
+        for x in (
+            "ban tu kiem diem",
+            "tu kiem diem hang nam",
+            "kiem diem cuoi nam",
+            "tu danh gia kiem diem",
+            "ban tu danh gia",
+            "ban kiem diem dang vien",
+            "kiem diem dang vien nam",
+            "ban kiem diem",
+            "nguoi kiem diem",
+            "xep loai dang vien",
+            "xp loai dang vien",
+            "kiem diem danh gia",
+        )
     )
 
 
@@ -136,20 +175,6 @@ def looks_like_ly_lich_header(header: str, full_text: str = "") -> bool:
     )
 
 
-def looks_like_kiem_diem_header(header: str, full_text: str = "") -> bool:
-    blob = unidecode((header or "") + "\n" + (full_text or "")[:350]).lower()
-    return any(
-        x in blob
-        for x in (
-            "ban tu kiem diem",
-            "tu kiem diem hang nam",
-            "kiem diem cuoi nam",
-            "tu danh gia kiem diem",
-            "ban tu danh gia",
-        )
-    )
-
-
 def should_force_new_document(
     open_doc_type: str | None,
     open_year: int | None,
@@ -172,8 +197,10 @@ def should_force_new_document(
 
     # Lý lịch: đổi loại / chạm soft-max + header LL mới / sang phiếu|kiểm điểm
     if open_t in {"LY_LICH_DANG_VIEN", "LY_LICH_NGUOI_XIN_VAO_DANG"}:
-        if looks_like_phieu_bo_sung(curr_header, curr_full) or curr_t.startswith(
-            "PHIEU_"
+        if (
+            looks_like_phieu_bo_sung(curr_header, curr_full)
+            or looks_like_phieu_dang_vien(curr_header, curr_full)
+            or curr_t.startswith("PHIEU_")
         ):
             return True, "ly_lich_to_phieu"
         if looks_like_kiem_diem_header(curr_header, curr_full) or curr_t.startswith(
@@ -182,6 +209,8 @@ def should_force_new_document(
             return True, "ly_lich_to_kiem_diem"
         if looks_like_standalone_minutes(curr_header, curr_full):
             return True, "ly_lich_to_minutes"
+        if looks_like_quyet_dinh_or_nghi_quyet(curr_header, curr_full):
+            return True, "ly_lich_to_quyet_dinh"
         max_ll = soft_max_pages_for(open_t) or 18
         if open_page_count >= max_ll and (
             looks_like_ly_lich_header(curr_header, curr_full) or curr_t == open_t

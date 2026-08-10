@@ -54,6 +54,12 @@ DOC_TYPE_SOFT_MAX_PAGES = {
     "BAN_TU_KIEM_DIEM_DANG_VIEN_VI_PHAM": 8,
 }
 
+# Post-pass: gộp lại nhóm cùng loại + cùng năm + trang liền (sau soft-max cắt)
+DOC_TYPE_SAME_YEAR_MERGE_MAX = {
+    "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 12,
+    "PHIEU_DANG_VIEN": 10,
+}
+
 # Khi hồ sơ không có CCCD trong OCR, dùng số TĐV làm khóa thư mục Phụ lục 2
 IDENTITY_ALLOW_TDV_AS_FOLDER_KEY = True
 

@@ -870,6 +870,108 @@ def test_absorb_trailing_after_soft_max() -> None:
     print("  OK  absorb_trailing_after_soft_max")
 
 
+def test_reattach_phieu_not_across_toc_into_ly_lich() -> None:
+    """Phiếu ĐV sau TOC orphan không được Case-3 gắn vào lý lịch booklet."""
+    from pipeline.orphan_reattacher import reattach_orphans
+
+    g = DocumentGroup(
+        group_id=2,
+        raw_title="LL",
+        doc_type="LY_LICH_DANG_VIEN",
+        page_numbers=list(range(3, 20)),
+        page_size_group="BOOKLET_SMALL",
+    )
+    signals = {
+        pn: _sig(pn, size="BOOKLET_SMALL", header="ly lich", full="noi dung")
+        for pn in range(3, 20)
+    }
+    signals[20] = _sig(20, size="A4_PORTRAIT", toc=True, header="MUC LUC")
+    signals[21] = _sig(
+        21,
+        size="A4_PORTRAIT",
+        header="MU 2 - SV\nPHIEU\nDANG VIEN",
+        full="SO TDV: 2772699\n01) Ho va ten",
+        score=0.2,
+    )
+    groups, orphans, decisions = reattach_orphans([g], [20, 21], signals)
+    assert 21 in orphans, (orphans, decisions)
+    assert 21 not in groups[0].page_numbers
+    assert any(
+        d.orphan_page_num == 21
+        and d.action == "keep_orphan"
+        for d in decisions
+    ), [d for d in decisions if d.orphan_page_num == 21]
+    print("  OK  reattach_phieu_not_across_toc_into_ly_lich")
+
+
+def test_scrub_phieu_out_of_ly_lich() -> None:
+    from pipeline.page_audit import scrub_mismatched_form_pages
+
+    g = DocumentGroup(
+        group_id=2,
+        raw_title="LL",
+        doc_type="LY_LICH_DANG_VIEN",
+        page_numbers=[3, 4, 5, 21, 22, 23],
+        page_size_group="BOOKLET_SMALL",
+    )
+    signals = {
+        3: _sig(3, size="BOOKLET_SMALL", header="LY LICH DANG VIEN", full="a"),
+        4: _sig(4, size="BOOKLET_SMALL", header="muc 2", full="b"),
+        5: _sig(5, size="BOOKLET_SMALL", header="muc 3", full="c"),
+        21: _sig(
+            21,
+            size="A4_PORTRAIT",
+            header="MU 2 - SV\nPHIEU DANG VIEN",
+            full="SO TDV 2772699",
+        ),
+        22: _sig(22, size="A4_PORTRAIT", header="22) Tom tat qua trinh", full="d"),
+        23: _sig(23, size="A4_PORTRAIT", header="23) Dao tao", full="e"),
+    }
+    groups, n = scrub_mismatched_form_pages([g], signals)
+    assert n >= 1
+    ll = next(gg for gg in groups if gg.doc_type == "LY_LICH_DANG_VIEN")
+    assert 21 not in ll.page_numbers
+    assert ll.page_numbers == [3, 4, 5]
+    phieu = next(gg for gg in groups if gg.doc_type == "PHIEU_DANG_VIEN")
+    assert phieu.page_numbers == [21, 22, 23]
+    print("  OK  scrub_phieu_out_of_ly_lich")
+
+
+def test_merge_adjacent_same_year_phieu() -> None:
+    from pipeline.page_audit import merge_adjacent_same_year_groups
+
+    g1 = DocumentGroup(
+        group_id=1,
+        raw_title="p1",
+        doc_type="PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        page_numbers=[100, 101, 102, 103, 104, 105],
+        page_size_group="A4_PORTRAIT",
+        doc_year=2009,
+    )
+    g2 = DocumentGroup(
+        group_id=2,
+        raw_title="p2",
+        doc_type="PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        page_numbers=[106, 107, 108, 109],
+        page_size_group="A4_PORTRAIT",
+        doc_year=2009,
+    )
+    g3 = DocumentGroup(
+        group_id=3,
+        raw_title="p3",
+        doc_type="PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        page_numbers=[120, 121],
+        page_size_group="A4_PORTRAIT",
+        doc_year=2011,
+    )
+    groups, n = merge_adjacent_same_year_groups([g1, g2, g3])
+    assert n == 1
+    assert len(groups) == 2
+    assert groups[0].page_numbers == list(range(100, 110))
+    assert groups[1].page_numbers == [120, 121]
+    print("  OK  merge_adjacent_same_year_phieu")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -912,6 +1014,9 @@ def main() -> int:
         test_identity_dot_ocr_name,
         test_identity_pham_huu_luat_and_tdv_fallback,
         test_absorb_trailing_after_soft_max,
+        test_reattach_phieu_not_across_toc_into_ly_lich,
+        test_scrub_phieu_out_of_ly_lich,
+        test_merge_adjacent_same_year_phieu,
     ]
     failed = 0
     for t in tests:

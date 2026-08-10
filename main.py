@@ -549,6 +549,18 @@ def main() -> int:
     except Exception as aex:
         logger.error(f"Absorb trailing orphans failed: {aex}")
 
+    # Pass-2d: gỡ trang lệch loại (phiếu ĐV dính LL, QĐ trong LL…)
+    try:
+        from pipeline.page_audit import scrub_mismatched_form_pages
+
+        groups, n_scrub_form = scrub_mismatched_form_pages(groups, all_signals)
+        if n_scrub_form:
+            logger.info(
+                f"Scrubbed {n_scrub_form} mismatched form pages into new groups"
+            )
+    except Exception as sex:
+        logger.error(f"Form scrub failed: {sex}")
+
     # Post-classify nhóm CHUA_XAC_DINH → catalog nếu match được
     try:
         from pipeline.party_doc_matcher import refine_unknown_group_types
@@ -616,6 +628,39 @@ def main() -> int:
         group._sequence_number = record.sequence_number
         if group.doc_year is None and record.doc_year is not None:
             group.doc_year = record.doc_year
+
+    # Gộp phiếu cùng năm bị soft-max cắt (sau khi đã có doc_year)
+    try:
+        from pipeline.page_audit import merge_adjacent_same_year_groups
+
+        groups, n_year_merge = merge_adjacent_same_year_groups(groups)
+        if n_year_merge:
+            logger.info(
+                f"Merged {n_year_merge} adjacent same-year form groups "
+                f"→ {len(groups)} documents"
+            )
+            # Gán lại sequence sau merge
+            doc_records = [
+                DocRecord(
+                    doc_type_key=g.doc_type,
+                    raw_title=g.raw_title,
+                    page_numbers=list(g.page_numbers),
+                    pdf_order=i,
+                    doc_year=g.doc_year,
+                    ocr_blob=_group_ocr_blob(g),
+                )
+                for i, g in enumerate(groups)
+            ]
+            try:
+                doc_records = year_sequencer.assign_sequence(doc_records)
+                for group, record in zip(groups, doc_records):
+                    group._sequence_number = record.sequence_number
+                    if group.doc_year is None and record.doc_year is not None:
+                        group.doc_year = record.doc_year
+            except Exception as _seq2:
+                logger.error(f"Re-sequence after year-merge failed: {_seq2}")
+    except Exception as mex:
+        logger.error(f"Same-year merge failed: {mex}")
 
     try:
         summary = year_sequencer.build_year_summary(doc_records)

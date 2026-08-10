@@ -582,7 +582,7 @@ def refine_unknown_group_types(
         key = (getattr(g, "doc_type", "") or "").upper()
         if key and key in PARTY_DOC_CATALOG and key != "CHUA_XAC_DINH":
             continue
-        pages = list(getattr(g, "page_numbers", []) or [])[:4]
+        pages = list(getattr(g, "page_numbers", []) or [])[:6]
         if not pages:
             continue
         headers: list[str] = []
@@ -599,6 +599,16 @@ def refine_unknown_group_types(
             continue
         header_blob = "\n".join(headers)
         full_blob = "\n".join(fulls)
+        # Quét thêm trang cuối (kiểm điểm hay kết ở cuối cụm KHAC)
+        last_pages = list(getattr(g, "page_numbers", []) or [])[-2:]
+        for pn in last_pages:
+            if pn in pages:
+                continue
+            sig = all_signals.get(pn)
+            if sig is None:
+                continue
+            header_blob += "\n" + (getattr(sig, "header_text", "") or "")
+            full_blob += "\n" + ((getattr(sig, "full_text", "") or "")[:600])
         result = matcher.match(
             header_blob,
             full_blob,

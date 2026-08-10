@@ -51,6 +51,207 @@ def scrub_toc_from_groups(
     return kept_groups, sorted(orphan_set), scrubbed
 
 
+def scrub_mismatched_form_pages(
+    groups: list[DocumentGroup],
+    all_signals: dict[int, PageSignal],
+) -> tuple[list[DocumentGroup], int]:
+    """
+    Gỡ trang lệch loại khỏi group form (vd. phiếu ĐV dính vào lý lịch).
+    Trang lệch → DocumentGroup mới theo loại suy ra.
+    """
+    from pipeline.doc_identity import (
+        looks_like_kiem_diem_header,
+        looks_like_phieu_bo_sung,
+        looks_like_phieu_dang_vien,
+        looks_like_quyet_dinh_or_nghi_quyet,
+    )
+
+    ll_types = {"LY_LICH_DANG_VIEN", "LY_LICH_NGUOI_XIN_VAO_DANG"}
+
+    def _foreign_type(host: str, header: str, full: str) -> str | None:
+        host_u = (host or "").upper()
+        if looks_like_phieu_bo_sung(header, full) and "PHIEU_BO_SUNG" not in host_u:
+            return "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
+        if looks_like_phieu_dang_vien(header, full) and "PHIEU" not in host_u:
+            return "PHIEU_DANG_VIEN"
+        if looks_like_kiem_diem_header(header, full) and not host_u.startswith(
+            "BAN_TU_KIEM"
+        ):
+            return "BAN_TU_KIEM_DIEM_HANG_NAM"
+        if looks_like_quyet_dinh_or_nghi_quyet(header, full) and host_u in ll_types:
+            return "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
+        return None
+
+    next_id = max((g.group_id for g in groups), default=0) + 1
+    out: list[DocumentGroup] = []
+    scrubbed = 0
+
+    for g in groups:
+        host = (g.doc_type or "").upper()
+        stay: list[int] = []
+        pending: list[tuple[str, list[int]]] = []  # (dtype, pages)
+
+        def _flush_pending() -> None:
+            nonlocal next_id, scrubbed
+            for dtype, pages in pending:
+                if not pages:
+                    continue
+                sig0 = all_signals.get(pages[0])
+                ng = DocumentGroup(
+                    group_id=next_id,
+                    raw_title=(getattr(sig0, "header_text", "") or "")[:200]
+                    if sig0
+                    else "",
+                    doc_type=dtype,
+                    page_numbers=list(pages),
+                    page_size_group=(
+                        getattr(sig0, "page_size_group", g.page_size_group)
+                        if sig0
+                        else g.page_size_group
+                    )
+                    or "OTHER",
+                )
+                next_id += 1
+                scrubbed += len(pages)
+                out.append(ng)
+                logger.warning(
+                    f"[audit] Scrub pages {pages[0]}-{pages[-1]} "
+                    f"out of group #{g.group_id} ({host}) → {dtype}"
+                )
+            pending.clear()
+
+        for pn in g.page_numbers:
+            sig = all_signals.get(pn)
+            header = getattr(sig, "header_text", "") if sig else ""
+            full = getattr(sig, "full_text", "") if sig else ""
+            foreign = _foreign_type(host, header or "", full or "")
+
+            if foreign:
+                # Group mở bằng trang ngoại lai → đổi loại thay vì peel
+                if not stay and (
+                    host in ll_types or host in {"CHUA_XAC_DINH", ""}
+                ):
+                    g.doc_type = foreign
+                    host = foreign
+                    stay.append(pn)
+                    continue
+                if pending and pending[-1][0] == foreign:
+                    pending[-1][1].append(pn)
+                else:
+                    if pending:
+                        _flush_pending()
+                    pending.append((foreign, [pn]))
+                continue
+
+            if pending:
+                from pipeline.continuation_validator import soft_max_pages_for
+                from pipeline.doc_identity import looks_like_ly_lich_header
+
+                dtype_p, pages_p = pending[-1]
+                max_soft = soft_max_pages_for(dtype_p) or 8
+                curr_sg = (
+                    getattr(sig, "page_size_group", "OTHER") if sig else "OTHER"
+                ) or "OTHER"
+                host_sg = g.page_size_group or "OTHER"
+                back_to_host = False
+                if host in ll_types and looks_like_ly_lich_header(
+                    header or "", full or ""
+                ):
+                    back_to_host = True
+                if len(pages_p) >= max_soft:
+                    back_to_host = True
+                # Booklet LL host + A4 foreign chain rồi lại booklet → đóng foreign
+                if (
+                    host in ll_types
+                    and host_sg in {"BOOKLET_SMALL", "BOOKLET_LANDSCAPE"}
+                    and curr_sg in {"BOOKLET_SMALL", "BOOKLET_LANDSCAPE"}
+                    and len(pages_p) >= 1
+                ):
+                    # chỉ đóng nếu đã có ≥1 trang foreign và trang hiện tại booklet
+                    prev_sg = (
+                        getattr(all_signals.get(pages_p[-1]), "page_size_group", "")
+                        or ""
+                    )
+                    if prev_sg in {"A4_PORTRAIT", "A4_MEDIUM", "OTHER"}:
+                        back_to_host = True
+
+                if back_to_host:
+                    _flush_pending()
+                    stay.append(pn)
+                else:
+                    pages_p.append(pn)
+                continue
+
+            stay.append(pn)
+
+        if pending:
+            # Nếu đổi loại cả group (stay chứa foreign vì host đổi) thì không flush
+            _flush_pending()
+
+        if stay:
+            g.page_numbers = stay
+            out.append(g)
+        else:
+            logger.warning(f"[audit] Drop empty group #{g.group_id} after form scrub")
+
+    return out, scrubbed
+
+
+def merge_adjacent_same_year_groups(
+    groups: list[DocumentGroup],
+    max_pages_by_type: dict[str, int] | None = None,
+) -> tuple[list[DocumentGroup], int]:
+    """
+    Gộp nhóm cùng loại + cùng năm + trang liền nhau (vd. phiếu bổ sung bị soft-max cắt).
+    """
+    import config as cfg
+
+    caps = max_pages_by_type or getattr(
+        cfg, "DOC_TYPE_SAME_YEAR_MERGE_MAX", None
+    ) or {
+        "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 12,
+        "PHIEU_DANG_VIEN": 10,
+    }
+    if not groups:
+        return groups, 0
+
+    ordered = sorted(
+        groups,
+        key=lambda g: (min(g.page_numbers) if g.page_numbers else 10**9, g.group_id),
+    )
+    merged: list[DocumentGroup] = []
+    n_merged = 0
+
+    for g in ordered:
+        dtype = (g.doc_type or "").upper()
+        cap = caps.get(dtype)
+        if (
+            merged
+            and cap is not None
+            and (merged[-1].doc_type or "").upper() == dtype
+            and merged[-1].doc_year is not None
+            and g.doc_year is not None
+            and merged[-1].doc_year == g.doc_year
+            and merged[-1].page_numbers
+            and g.page_numbers
+            and min(g.page_numbers) == max(merged[-1].page_numbers) + 1
+            and len(merged[-1].page_numbers) + len(g.page_numbers) <= cap
+        ):
+            merged[-1].page_numbers = sorted(
+                set(merged[-1].page_numbers) | set(g.page_numbers)
+            )
+            n_merged += 1
+            logger.info(
+                f"[merge] group #{g.group_id} → #{merged[-1].group_id} "
+                f"{dtype} year={g.doc_year} pages={merged[-1].page_numbers[0]}-"
+                f"{merged[-1].page_numbers[-1]}"
+            )
+        else:
+            merged.append(g)
+
+    return merged, n_merged
+
+
 def audit_page_coverage(
     pages_processed: int,
     groups: list[DocumentGroup],

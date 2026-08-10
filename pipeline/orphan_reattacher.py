@@ -235,9 +235,16 @@ def _judge_orphan(
             )
         )
     ):
-        from pipeline.doc_identity import looks_like_phieu_bo_sung
+        from pipeline.doc_identity import (
+            looks_like_kiem_diem_header,
+            looks_like_phieu_bo_sung,
+            looks_like_phieu_dang_vien,
+            looks_like_quyet_dinh_or_nghi_quyet,
+        )
 
         open_t = (prev_group.doc_type or "").upper()
+        header = getattr(signal, "header_text", "") or ""
+        full = getattr(signal, "full_text", "") or ""
         max_soft = soft_max_pages_for(open_t)
         if max_soft is not None and len(prev_group.page_numbers) >= max_soft:
             return ReattachDecision(
@@ -247,14 +254,33 @@ def _judge_orphan(
                 reason=f"prev_group_at_max_pages({max_soft})",
                 confidence=1.0,
             )
-        if looks_like_phieu_bo_sung(
-            getattr(signal, "header_text", ""), getattr(signal, "full_text", "") or ""
+        if looks_like_phieu_bo_sung(header, full) or looks_like_phieu_dang_vien(
+            header, full
+        ):
+            if "PHIEU" not in open_t:
+                return ReattachDecision(
+                    orphan_page_num=orphan_pn,
+                    action="keep_orphan",
+                    target_group_id=None,
+                    reason="phieu_not_into_non_phieu_trailing",
+                    confidence=1.0,
+                )
+        if looks_like_kiem_diem_header(header, full) and not open_t.startswith(
+            "BAN_TU_KIEM"
         ):
             return ReattachDecision(
                 orphan_page_num=orphan_pn,
                 action="keep_orphan",
                 target_group_id=None,
-                reason="looks_like_phieu_bo_sung_keep_for_new_doc",
+                reason="kiem_diem_not_into_other_trailing",
+                confidence=1.0,
+            )
+        if looks_like_quyet_dinh_or_nghi_quyet(header, full):
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="quyet_dinh_trailing_keep_orphan",
                 confidence=1.0,
             )
         if _looks_like_standalone_minutes(signal):
@@ -263,6 +289,16 @@ def _judge_orphan(
                 action="keep_orphan",
                 target_group_id=None,
                 reason="minutes_trailing_keep_orphan",
+                confidence=1.0,
+            )
+        open_sg = prev_group.page_size_group or "OTHER"
+        curr_sg = getattr(signal, "page_size_group", "OTHER") or "OTHER"
+        if open_sg in _STRONG_SIZE and curr_sg in {"A4_PORTRAIT", "A4_MEDIUM"}:
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="size_mismatch_trailing_keep_orphan",
                 confidence=1.0,
             )
         return ReattachDecision(
@@ -285,6 +321,10 @@ def _judge_orphan(
     chain_start = orphan_pn
     orphan_set = set(current_orphans)
     while (chain_start - 1) in orphan_set:
+        # Không nhảy qua TOC trong chuỗi orphan
+        prev_sig = all_signals.get(chain_start - 1)
+        if prev_sig is not None and getattr(prev_sig, "is_toc", False):
+            break
         chain_start -= 1
     chain_prev_group = page_to_group.get(chain_start - 1)
     if (
@@ -294,7 +334,12 @@ def _judge_orphan(
         and not signal.matched_doc_type
         and float(getattr(signal, "boundary_score", 0.0) or 0.0) < 0.35
     ):
-        from pipeline.doc_identity import looks_like_phieu_bo_sung
+        from pipeline.doc_identity import (
+            looks_like_kiem_diem_header,
+            looks_like_phieu_bo_sung,
+            looks_like_phieu_dang_vien,
+            looks_like_quyet_dinh_or_nghi_quyet,
+        )
 
         chain_t = (chain_prev_group.doc_type or "").upper()
         max_soft = soft_max_pages_for(chain_t)
@@ -314,14 +359,49 @@ def _judge_orphan(
                 reason="minutes_chain_keep_orphan",
                 confidence=1.0,
             )
-        if looks_like_phieu_bo_sung(
+        # Không gắn loại form khác vào group đang mở (vd. phiếu ĐV → lý lịch)
+        if looks_like_phieu_dang_vien(
+            getattr(signal, "header_text", ""), getattr(signal, "full_text", "") or ""
+        ) or looks_like_phieu_bo_sung(
+            getattr(signal, "header_text", ""), getattr(signal, "full_text", "") or ""
+        ):
+            if "PHIEU" not in chain_t:
+                return ReattachDecision(
+                    orphan_page_num=orphan_pn,
+                    action="keep_orphan",
+                    target_group_id=None,
+                    reason="phieu_not_into_non_phieu_chain",
+                    confidence=1.0,
+                )
+        if looks_like_kiem_diem_header(
+            getattr(signal, "header_text", ""), getattr(signal, "full_text", "") or ""
+        ) and not chain_t.startswith("BAN_TU_KIEM"):
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="kiem_diem_not_into_other_chain",
+                confidence=1.0,
+            )
+        if looks_like_quyet_dinh_or_nghi_quyet(
             getattr(signal, "header_text", ""), getattr(signal, "full_text", "") or ""
         ):
             return ReattachDecision(
                 orphan_page_num=orphan_pn,
                 action="keep_orphan",
                 target_group_id=None,
-                reason="looks_like_phieu_bo_sung_keep_for_new_doc",
+                reason="quyet_dinh_chain_keep_orphan",
+                confidence=1.0,
+            )
+        # Không gắn A4 vào booklet/landscape lý lịch
+        open_sg = chain_prev_group.page_size_group or "OTHER"
+        curr_sg = getattr(signal, "page_size_group", "OTHER") or "OTHER"
+        if open_sg in _STRONG_SIZE and curr_sg in {"A4_PORTRAIT", "A4_MEDIUM"}:
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="keep_orphan",
+                target_group_id=None,
+                reason="size_mismatch_chain_keep_orphan",
                 confidence=1.0,
             )
         return ReattachDecision(
