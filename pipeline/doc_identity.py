@@ -111,6 +111,9 @@ def looks_like_phieu_dang_vien(header: str, full_text: str = "") -> bool:
 
 
 def looks_like_kiem_diem_header(header: str, full_text: str = "") -> bool:
+    # Họp chi đoàn/chi bộ xét kiểm điểm ≠ bản tự kiểm điểm cá nhân
+    if looks_like_standalone_minutes(header, full_text):
+        return False
     blob = unidecode((header or "") + "\n" + (full_text or "")[:400]).lower()
     # OCR dính chữ: "BANKIEMDIEM" / "BAN TU KIEN AIEN"
     compact = re.sub(r"[\s\-_\.]+", "", blob)
@@ -159,11 +162,14 @@ def looks_like_phieu_xin_y_kien(header: str, full_text: str = "") -> bool:
 def looks_like_ban_giao_listing(header: str, full_text: str = "") -> bool:
     """Trang bàn giao / liệt kê tài liệu hồ sơ (không phải form catalog)."""
     blob = unidecode((header or "") + "\n" + (full_text or "")[:500]).lower()
+    compact = re.sub(r"[\s\-_\.']+", "", blob)
     hints = (
         "quyen ly lich",
         "1 quyen ly lich",
         "bien ban hop chi bo",
         "giay chuyen sinh hoat",
+        "phieu dang vien",
+        "ban tu kiem",
     )
     hits = sum(1 for h in hints if h in blob)
     if hits >= 2:
@@ -172,11 +178,125 @@ def looks_like_ban_giao_listing(header: str, full_text: str = "") -> bool:
         "bien ban" in blob or "phieu" in blob
     ):
         return True
+    # OCR méo: "HiSi oni Do Phm Hui Loit gim:" = Hồ sơ của Đ/c ... gồm:
+    if ("gim:" in blob or "gom:" in blob or "gom " in blob) and (
+        "lylich" in compact or "quyenly" in compact or "bienbn" in compact
+    ):
+        return True
+    if "hoso" in compact and ("gom" in compact or "gim" in compact) and hits >= 1:
+        return True
+    return False
+
+
+def looks_like_noi_cu_tru_form_section(header: str, full_text: str = "") -> bool:
+    """
+    Biên bản / ý kiến nhận xét nơi cư trú — thường là Mục IV trong phiếu bổ sung,
+    không phải biên bản họp độc lập.
+    """
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:700]).lower()
+    noi = (
+        "noi cu tru" in blob
+        or "noi cua" in blob
+        or "noi  cua" in blob
+        or "noi cuá" in blob
+    )
+    if not noi:
+        return False
+    return any(
+        x in blob
+        for x in (
+            "bien ban",
+            "y kien nhan xet",
+            "y kin nhan xet",
+            "muc iv",
+            "mu iv",
+            "to truong dan pho",
+            "truong dan pho",
+            "to dan pho",
+        )
+    )
+
+
+def looks_like_van_bang_chung_chi(header: str, full_text: str = "") -> bool:
+    """Văn bằng / chứng chỉ tốt nghiệp / chứng thực (không phải LLCT)."""
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:600]).lower()
+    if any(
+        x in blob
+        for x in (
+            "ly luan chinh tri",
+            "chung chi ly luan",
+            "bang ly luan",
+            "llct",
+        )
+    ):
+        return False
+    strong = (
+        "bang tot nghiep",
+        "giay chung nhan tot nghiep",
+        "chung nhan tot nghiep",
+        "tot nghiep",
+        "so hieu bang",
+        "chung thuc",
+        "van bang",
+    )
+    if any(x in blob for x in strong):
+        # Trang chứng thực UBND / bằng — tránh dính biên bản có chữ tốt
+        if "bien ban" in blob and "tot nghiep" not in blob:
+            return False
+        return True
+    return False
+
+
+def looks_like_danh_gia_phan_loai(header: str, full_text: str = "") -> bool:
+    """Ý kiến / biểu quyết chi bộ đánh giá phân loại đảng viên hàng năm."""
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:500]).lower()
+    if "phan loai dang vien" in blob or "danh gia phan loai" in blob:
+        return True
+    if "ket qua bieu quyet" in blob and (
+        "chi bo" in blob or "y kien nhan xet" in blob or "y kin nhan xet" in blob
+    ):
+        return True
+    return False
+
+
+def looks_like_qd_body_continuation(header: str, full_text: str = "") -> bool:
+    """
+    Trang giữa/cuối Quyết định (Điều 2/3, danh sách đồng chí) — không phải QĐ mới.
+    """
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:700]).lower()
+    head = unidecode((header or "")[:220]).lower()
+    # QĐ mới thường mở bằng số + QD/TU hoặc tiêu đề QUYẾT ĐỊNH V/V
+    if re.search(r"\bso[:\s].{0,12}qd", head) and "quyet dinh" in head:
+        return False
+    if "quyet dinh" in head and (
+        "v/v" in head or "ve viec" in head or "v vic" in head
+    ):
+        return False
+    if any(
+        x in blob
+        for x in (
+            "dieu 2:",
+            "dieu 2 ",
+            "diu 2:",
+            "dieu 3:",
+            "dieu 3 ",
+            "diu 3:",
+            "chuan y ban thuong vu",
+            "chun y ban thuong v",
+        )
+    ):
+        return True
+    # Danh sách thành viên BCH (nhiều "đồng chí" + chức vụ, không tiêu đề QĐ)
+    if blob.count("dong chi") >= 4 and "quyet dinh" not in head:
+        return True
     return False
 
 
 def is_quyet_dinh_type(doc_type: str | None) -> bool:
-    return bool(doc_type) and str(doc_type).upper().startswith("QUYET_DINH")
+    t = (doc_type or "").upper()
+    return bool(t) and (
+        t.startswith("QUYET_DINH") or t.startswith("CAC_QUYET_DINH")
+    )
 
 
 def looks_like_standalone_minutes(header: str, full_text: str = "") -> bool:
@@ -184,19 +304,25 @@ def looks_like_standalone_minutes(header: str, full_text: str = "") -> bool:
     Biên bản / trích biên bản / họp chi bộ|chi đoàn — độc lập với Quyết định.
     Dùng unidecode + hint rộng vì OCR viết tay thường méo.
     """
+    if looks_like_noi_cu_tru_form_section(header, full_text):
+        return False
     blob = unidecode((header or "") + "\n" + (full_text or "")[:900]).lower()
+    compact = re.sub(r"[\s\-_\.]+", "", blob)
     strong = (
         "bien ban",
         "trich bien ban",
         "trich bb",
         "hop chi bo",
         "hop chi doan",
+        "hop chi-doan",
         "hop to dang",
         "xet chuyen dang chinh thuc",
         "xet chuyen dang vien chinh thuc",
         "chuyen dang chinh thuc",
     )
     if any(h in blob for h in strong):
+        return True
+    if "hopchidoan" in compact or "hopchi-doan" in compact:
         return True
     # OCR méo: "trich" + "bien" tách, hoặc Phần 1/2 + biểu quyết
     soft_pair = (

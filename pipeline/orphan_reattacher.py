@@ -215,6 +215,55 @@ def _judge_orphan(
             confidence=0.92,
         )
 
+    # CASE 1b: kẹp giữa hai group cùng loại phiếu (vd. 82|83|84 bị cắt soft-max)
+    if (
+        prev_group is not None
+        and next_group is not None
+        and prev_group.group_id != next_group.group_id
+        and (prev_group.doc_type or "").upper()
+        == (next_group.doc_type or "").upper()
+        and (prev_group.doc_type or "").upper()
+        in {
+            "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+            "PHIEU_DANG_VIEN",
+        }
+        and not _looks_like_standalone_minutes(signal)
+    ):
+        max_soft = soft_max_pages_for(prev_group.doc_type)
+        if max_soft is None or len(prev_group.page_numbers) < max_soft:
+            return ReattachDecision(
+                orphan_page_num=orphan_pn,
+                action="attach_prev",
+                target_group_id=prev_group.group_id,
+                reason="sandwiched_between_same_phieu_type",
+                confidence=0.90,
+            )
+
+    # CASE 1c: trang thân Quyết định (Điều 2/danh sách) sau QĐ/CAC_QUYET
+    if prev_group is not None and signal is not None:
+        from pipeline.doc_identity import looks_like_qd_body_continuation
+
+        pt = (prev_group.doc_type or "").upper()
+        header = getattr(signal, "header_text", "") or ""
+        full = getattr(signal, "full_text", "") or ""
+        if (
+            (pt.startswith("CAC_QUYET_DINH") or pt.startswith("QUYET_DINH"))
+            and looks_like_qd_body_continuation(header, full)
+            and not _looks_like_standalone_minutes(signal)
+            and not getattr(signal, "is_toc", False)
+        ):
+            max_soft = soft_max_pages_for(pt)
+            if max_soft is None:
+                max_soft = 6
+            if len(prev_group.page_numbers) < max_soft:
+                return ReattachDecision(
+                    orphan_page_num=orphan_pn,
+                    action="attach_prev",
+                    target_group_id=prev_group.group_id,
+                    reason="qd_body_continuation",
+                    confidence=0.88,
+                )
+
     # CASE 2: trailing page of multi-page form
     if (
         prev_group is not None
@@ -605,11 +654,14 @@ def decisions_to_dicts(decisions: list[ReattachDecision]) -> list[dict]:
 def _infer_orphan_doc_type(signal: PageSignal) -> Optional[str]:
     """Suy loại catalog từ signal orphan (matcher + heuristic)."""
     from pipeline.doc_identity import (
+        looks_like_danh_gia_phan_loai,
         looks_like_kiem_diem_header,
         looks_like_ly_lich_header,
         looks_like_phieu_bo_sung,
         looks_like_phieu_dang_vien,
+        looks_like_qd_body_continuation,
         looks_like_quyet_dinh_or_nghi_quyet,
+        looks_like_van_bang_chung_chi,
     )
     from pipeline.party_doc_matcher import get_matcher
     from pipeline.party_catalog import PARTY_DOC_CATALOG
@@ -626,6 +678,10 @@ def _infer_orphan_doc_type(signal: PageSignal) -> Optional[str]:
     if key and key in PARTY_DOC_CATALOG:
         return key
 
+    if looks_like_van_bang_chung_chi(header, full):
+        return "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"
+    if looks_like_danh_gia_phan_loai(header, full):
+        return "BAN_TU_KIEM_DIEM_HANG_NAM"
     if looks_like_phieu_bo_sung(header, full):
         return "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
     if looks_like_phieu_dang_vien(header, full):
@@ -638,6 +694,8 @@ def _infer_orphan_doc_type(signal: PageSignal) -> Optional[str]:
         return "BAN_TU_KIEM_DIEM_HANG_NAM"
     if looks_like_ly_lich_header(header, full):
         return "LY_LICH_DANG_VIEN"
+    if looks_like_qd_body_continuation(header, full):
+        return "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
     if looks_like_quyet_dinh_or_nghi_quyet(header, full):
         # Generic bucket for quyết định điều động / công nhận khi matcher miss
         return "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"

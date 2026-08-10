@@ -300,6 +300,7 @@ def eject_noise_pages_from_unknown(
             kept.append(g)
             continue
         stay: list[int] = []
+        ejected_here: list[int] = []
         for pn in g.page_numbers:
             sig = all_signals.get(pn)
             header = getattr(sig, "header_text", "") if sig else ""
@@ -308,12 +309,27 @@ def eject_noise_pages_from_unknown(
                 looks_like_ban_giao_listing(header or "", full or "")
             ):
                 orphan_set.add(pn)
+                ejected_here.append(pn)
                 ejected += 1
                 logger.warning(
                     f"[audit] Eject page {pn} from KHAC #{g.group_id} → orphan"
                 )
             else:
                 stay.append(pn)
+        # Trang còn lại trong cùng KHAC, liền biên bản vừa eject → cũng orphan
+        if ejected_here and stay:
+            still: list[int] = []
+            for pn in stay:
+                if any(abs(pn - e) <= 1 for e in ejected_here):
+                    orphan_set.add(pn)
+                    ejected += 1
+                    logger.warning(
+                        f"[audit] Eject adjacent page {pn} from KHAC "
+                        f"#{g.group_id} → orphan (minutes cluster)"
+                    )
+                else:
+                    still.append(pn)
+            stay = still
         if stay:
             g.page_numbers = stay
             kept.append(g)
@@ -323,12 +339,128 @@ def eject_noise_pages_from_unknown(
     return kept, sorted(orphan_set), ejected
 
 
+def scrub_minutes_misclassified_as_kiem_diem(
+    groups: list[DocumentGroup],
+    all_signals: dict[int, PageSignal],
+    orphan_pages: list[int],
+) -> tuple[list[DocumentGroup], list[int], int]:
+    """
+    Gỡ trang họp chi đoàn/chi bộ (biên bản) bị gắn nhầm BAN_TU_KIEM_* → orphan.
+    """
+    from pipeline.doc_identity import looks_like_standalone_minutes
+
+    orphan_set = set(orphan_pages)
+    scrubbed = 0
+    kept: list[DocumentGroup] = []
+
+    for g in groups:
+        host = (g.doc_type or "").upper()
+        if not host.startswith("BAN_TU_KIEM"):
+            kept.append(g)
+            continue
+        stay: list[int] = []
+        for pn in g.page_numbers:
+            sig = all_signals.get(pn)
+            header = getattr(sig, "header_text", "") if sig else ""
+            full = getattr(sig, "full_text", "") if sig else ""
+            if looks_like_standalone_minutes(header or "", full or ""):
+                orphan_set.add(pn)
+                scrubbed += 1
+                logger.warning(
+                    f"[audit] Scrub minutes page {pn} out of "
+                    f"kiem_diem #{g.group_id} → orphan"
+                )
+            else:
+                stay.append(pn)
+        if stay:
+            g.page_numbers = stay
+            kept.append(g)
+        else:
+            logger.warning(
+                f"[audit] Drop empty kiem_diem #{g.group_id} after minutes scrub"
+            )
+
+    return kept, sorted(orphan_set), scrubbed
+
+
+def absorb_unknown_into_adjacent_kiem_diem(
+    groups: list[DocumentGroup],
+    all_signals: dict[int, PageSignal],
+) -> tuple[list[DocumentGroup], int]:
+    """
+    Gắn trang CHUA_XAC_DINH 1 trang (mảnh giữa) vào group kiểm điểm liền trước/sau.
+    """
+    from pipeline.continuation_validator import soft_max_pages_for
+    from pipeline.doc_identity import (
+        looks_like_ban_giao_listing,
+        looks_like_phieu_bo_sung,
+        looks_like_phieu_dang_vien,
+        looks_like_quyet_dinh_or_nghi_quyet,
+        looks_like_standalone_minutes,
+    )
+
+    by_page: dict[int, DocumentGroup] = {}
+    for g in groups:
+        for pn in g.page_numbers:
+            by_page[pn] = g
+
+    absorbed = 0
+    drop_ids: set[int] = set()
+    ordered = sorted(
+        groups,
+        key=lambda g: (min(g.page_numbers) if g.page_numbers else 10**9, g.group_id),
+    )
+
+    for g in ordered:
+        host = (g.doc_type or "").upper()
+        if host not in {"CHUA_XAC_DINH", ""} or len(g.page_numbers) != 1:
+            continue
+        pn = g.page_numbers[0]
+        sig = all_signals.get(pn)
+        header = getattr(sig, "header_text", "") if sig else ""
+        full = getattr(sig, "full_text", "") if sig else ""
+        if looks_like_standalone_minutes(header or "", full or ""):
+            continue
+        if looks_like_ban_giao_listing(header or "", full or ""):
+            continue
+        if looks_like_phieu_bo_sung(header or "", full or "") or looks_like_phieu_dang_vien(
+            header or "", full or ""
+        ):
+            continue
+        if looks_like_quyet_dinh_or_nghi_quyet(header or "", full or ""):
+            continue
+
+        for neighbor in (pn - 1, pn + 1):
+            host_g = by_page.get(neighbor)
+            if host_g is None or host_g.group_id == g.group_id:
+                continue
+            ht = (host_g.doc_type or "").upper()
+            if not ht.startswith("BAN_TU_KIEM"):
+                continue
+            max_soft = soft_max_pages_for(ht)
+            if max_soft is not None and len(host_g.page_numbers) >= max_soft:
+                continue
+            host_g.page_numbers = sorted(set(host_g.page_numbers) | {pn})
+            by_page[pn] = host_g
+            drop_ids.add(g.group_id)
+            absorbed += 1
+            logger.info(
+                f"[audit] Absorb KHAC page {pn} → kiem_diem #{host_g.group_id}"
+            )
+            break
+
+    if not drop_ids:
+        return groups, 0
+    return [g for g in groups if g.group_id not in drop_ids], absorbed
+
+
 def merge_adjacent_same_year_groups(
     groups: list[DocumentGroup],
     max_pages_by_type: dict[str, int] | None = None,
 ) -> tuple[list[DocumentGroup], int]:
     """
-    Gộp nhóm cùng loại + cùng năm + trang liền nhau (vd. phiếu bổ sung bị soft-max cắt).
+    Gộp nhóm cùng loại + trang liền nhau (vd. phiếu bổ sung bị soft-max cắt).
+    Kiểm điểm: bắt buộc cùng năm. Phiếu/QĐ: cho phép thiếu năm một bên.
     """
     import config as cfg
 
@@ -337,6 +469,7 @@ def merge_adjacent_same_year_groups(
     ) or {
         "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 12,
         "PHIEU_DANG_VIEN": 10,
+        "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM": 6,
     }
     if not groups:
         return groups, 0
@@ -351,26 +484,42 @@ def merge_adjacent_same_year_groups(
     for g in ordered:
         dtype = (g.doc_type or "").upper()
         cap = caps.get(dtype)
-        if (
+        if cap is None and dtype.startswith("CAC_QUYET_DINH"):
+            cap = caps.get("CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM", 6)
+        can_try = (
             merged
             and cap is not None
             and (merged[-1].doc_type or "").upper() == dtype
-            and merged[-1].doc_year is not None
-            and g.doc_year is not None
-            and merged[-1].doc_year == g.doc_year
             and merged[-1].page_numbers
             and g.page_numbers
             and min(g.page_numbers) == max(merged[-1].page_numbers) + 1
             and len(merged[-1].page_numbers) + len(g.page_numbers) <= cap
-        ):
+        )
+        year_ok = False
+        if can_try:
+            if dtype.startswith("BAN_TU_KIEM"):
+                year_ok = (
+                    merged[-1].doc_year is not None
+                    and g.doc_year is not None
+                    and merged[-1].doc_year == g.doc_year
+                )
+            else:
+                year_ok = (
+                    merged[-1].doc_year is None
+                    or g.doc_year is None
+                    or merged[-1].doc_year == g.doc_year
+                )
+        if can_try and year_ok:
             merged[-1].page_numbers = sorted(
                 set(merged[-1].page_numbers) | set(g.page_numbers)
             )
+            if merged[-1].doc_year is None and g.doc_year is not None:
+                merged[-1].doc_year = g.doc_year
             n_merged += 1
             logger.info(
                 f"[merge] group #{g.group_id} → #{merged[-1].group_id} "
-                f"{dtype} year={g.doc_year} pages={merged[-1].page_numbers[0]}-"
-                f"{merged[-1].page_numbers[-1]}"
+                f"{dtype} year={merged[-1].doc_year} pages="
+                f"{merged[-1].page_numbers[0]}-{merged[-1].page_numbers[-1]}"
             )
         else:
             merged.append(g)

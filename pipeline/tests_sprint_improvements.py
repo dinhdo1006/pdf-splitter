@@ -1168,8 +1168,139 @@ def test_eject_minutes_from_khac() -> None:
     groups, orphans, n = eject_noise_pages_from_unknown([g], signals, [])
     assert n >= 1
     assert 33 in orphans
-    assert groups and 33 not in groups[0].page_numbers
+    # Trang liền biên bản trong cùng KHAC cũng bị đẩy orphan
+    assert 32 in orphans or 34 in orphans
+    assert not groups or all(33 not in gg.page_numbers for gg in groups)
     print("  OK  eject_minutes_from_khac")
+
+
+def test_v10_classify_remaining_pages() -> None:
+    """OCR v9 còn lại: 44-45 QĐ, 50 văn bằng, 59 listing, 83 nơi cư trú, 99 phân loại."""
+    from pipeline.doc_identity import (
+        looks_like_ban_giao_listing,
+        looks_like_danh_gia_phan_loai,
+        looks_like_noi_cu_tru_form_section,
+        looks_like_qd_body_continuation,
+        looks_like_standalone_minutes,
+        looks_like_van_bang_chung_chi,
+    )
+    from pipeline.orphan_reattacher import promote_orphans_to_groups, reattach_orphans
+    from pipeline.page_audit import scrub_minutes_misclassified_as_kiem_diem
+    from pipeline.review_namer import orphan_review_filename
+
+    # 35: họp chi đoàn ≠ kiểm điểm
+    hop = (
+        "HOP CHI-DOAN BUU DIEN SOC SON XET KIEM DIEM DANG VIEN DU BI "
+        "CHUYEN SANG SINH HOAT CHINH THUC"
+    )
+    assert looks_like_standalone_minutes(hop, "xet ban kiem diem cua dang vien du bi")
+
+    g_wrong = DocumentGroup(
+        group_id=1,
+        raw_title="hop",
+        doc_type="BAN_TU_KIEM_DIEM_HANG_NAM",
+        page_numbers=[35],
+        page_size_group="OTHER",
+    )
+    groups, orphans, n = scrub_minutes_misclassified_as_kiem_diem(
+        [g_wrong],
+        {35: _sig(35, header=hop, full="xet ban kiem diem")},
+        [],
+    )
+    assert n == 1 and 35 in orphans and not groups
+
+    # 44-45 → gắn vào QĐ 43
+    g43 = DocumentGroup(
+        group_id=43,
+        raw_title="QD",
+        doc_type="CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM",
+        page_numbers=[43],
+        page_size_group="A4_PORTRAIT",
+        doc_year=2010,
+    )
+    sig44 = _sig(
+        44,
+        size="A4_PORTRAIT",
+        header="9. Dong chi Le Thi Kim Dung",
+        full=(
+            "9. Dong chi A\n10. Dong chi Pham Huu Luat\n"
+            "11. Dong chi B\n12. Dong chi C\n13. Dong chi D\n14. Dong chi E"
+        ),
+    )
+    sig45 = _sig(
+        45,
+        size="A4_PORTRAIT",
+        header="Dieu 2: Chun y Ban Thuong vu",
+        full="Dieu 2: Chun y Ban Thuong vu, Bi thu khoa XIII (2010-2015)",
+    )
+    assert looks_like_qd_body_continuation(sig44.header_text, sig44.full_text)
+    assert looks_like_qd_body_continuation(sig45.header_text, sig45.full_text)
+    groups, orphans, _ = reattach_orphans(
+        [g43], [44, 45], {43: _sig(43, size="A4_PORTRAIT"), 44: sig44, 45: sig45}
+    )
+    assert 44 in groups[0].page_numbers
+    assert 45 in groups[0].page_numbers
+
+    # 50 văn bằng
+    vb = _sig(
+        50,
+        header="tot nghiep\nCHU TICH\nCNVN",
+        full="bang tot nghiep so hieu bang Chung thuc UBND",
+    )
+    assert looks_like_van_bang_chung_chi(vb.header_text, vb.full_text)
+    groups, orphans, n = promote_orphans_to_groups([], [50], {50: vb})
+    assert n == 1 and groups[0].doc_type == "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"
+
+    # 59 listing hồ sơ
+    listing = (
+        "HiSi oni Do Phm Hui Loit gim:\n1 quyen ly' lich Dyrin\n"
+        "1 biin bin dhop cri bo\n1 qiay chuyin Sins hoal"
+    )
+    assert looks_like_ban_giao_listing(listing, listing)
+    assert orphan_review_filename(
+        59, _sig(59, header=listing, full=listing)
+    ).startswith("MUC_LUC")
+
+    # 83 nơi cư trú → không standalone; sandwich vào phiếu
+    nx = _sig(
+        83,
+        size="A4_PORTRAIT",
+        header="Mu IV. y kin nhan xet noi cu tru\nBIEN BAN",
+        full="Hoi nghi chi uy, to truong dan pho noi cua gia dinh",
+    )
+    assert looks_like_noi_cu_tru_form_section(nx.header_text, nx.full_text)
+    assert not looks_like_standalone_minutes(nx.header_text, nx.full_text)
+    g82 = DocumentGroup(
+        group_id=82,
+        raw_title="p",
+        doc_type="PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        page_numbers=[82],
+        page_size_group="A4_PORTRAIT",
+    )
+    g84 = DocumentGroup(
+        group_id=84,
+        raw_title="p",
+        doc_type="PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        page_numbers=[84],
+        page_size_group="A4_PORTRAIT",
+    )
+    groups, orphans, _ = reattach_orphans(
+        [g82, g84],
+        [83],
+        {
+            82: _sig(82, size="A4_PORTRAIT", matched="PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
+            83: nx,
+            84: _sig(84, size="A4_PORTRAIT", matched="PHIEU_BO_SUNG_HO_SO_DANG_VIEN"),
+        },
+    )
+    assert 83 in groups[0].page_numbers
+
+    # 99 đánh giá phân loại
+    assert looks_like_danh_gia_phan_loai(
+        "Y KIEN NHAN XET VA KET QUA BIEU QUYET CUA CHI BO DANH GIA PHAN LOAI DANG VIEN NAM 2009",
+        "Ket qua bieu quyet",
+    )
+    print("  OK  v10_classify_remaining_pages")
 
 
 def test_force_phieu_xin_y_kien_out_of_kiem_diem() -> None:
@@ -1336,6 +1467,7 @@ def main() -> int:
         test_scrub_ke_khai_out_of_kiem_diem,
         test_jammed_ocr_kiem_diem_and_refine_khac,
         test_eject_minutes_from_khac,
+        test_v10_classify_remaining_pages,
         test_force_phieu_xin_y_kien_out_of_kiem_diem,
         test_y_kien_does_not_swallow_kiem_diem,
         test_scrub_kiem_diem_out_of_y_kien,

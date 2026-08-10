@@ -99,9 +99,18 @@ _ALIASES: list[tuple[str, str]] = [
     ("ban tu danh gia", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("tu danh gia kiem diem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("ban tu kiem diem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    # Dự bị TRƯỚC alias chung "ban kiem diem dang vien"
+    ("ban kiem diem dang vien du bi", "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI"),
+    ("kiem diem dang vien du bi", "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI"),
+    ("trong thoi gian du bi", "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI"),
+    ("trong thoi gian diubi", "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI"),
     ("ban kiem diem dang vien", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("ban kiem diem ca nhan", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("bankiemdiem", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("danh gia phan loai dang vien", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("phan loai dang vien nam", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("ket qua bieu quyet cua chi bo", "BAN_TU_KIEM_DIEM_HANG_NAM"),
+    ("y kien nhan xet va ket qua bieu quyet", "BAN_TU_KIEM_DIEM_HANG_NAM"),
     ("phieu xin y kien", "TONG_HOP_Y_KIEN_NHAN_XET_DANG_VIEN_DU_BI"),
     # Nghị quyết / giới thiệu
     ("nghi quyet gioi thieu doan vien", "NGHI_QUYET_GIOI_THIEU_DOAN_VIEN_UU_TU"),
@@ -164,6 +173,7 @@ _ALIASES: list[tuple[str, str]] = [
     ("chung chi hanh nghe", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
     ("giay chung nhan tot nghiep", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
     ("chung nhan tot nghiep", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
+    ("so hieu bang", "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"),
     ("quyet dinh dieu dong", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
     ("quyet dinh bo nhiem", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
     ("quyet dinh chuyen cong tac", "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"),
@@ -434,14 +444,17 @@ class PartyDocMatcher:
             return MatchResult("", 0.0, "FORM_SECTION", "form_section")
 
         # Appendix soft patterns (không phải catalog 104)
-        # Biên bản / trích biên bản ≠ bản tự kiểm điểm / quyết định
+        # Biên bản / họp chi đoàn xét ≠ bản tự kiểm điểm / quyết định
         if "tu kiem diem" not in blob_low:
+            compact_blob = re.sub(r"[\s\-_\.]+", "", blob_low)
             if (
                 "bien ban" in blob_low
                 or "trich bien" in blob_low
                 or ("hop chi bo" in blob_low and "xet" in blob_low)
+                or "hop chi doan" in blob_low
+                or "hopchidoan" in compact_blob
             ):
-                logger.debug("[matcher] bien ban → appendix (not kiem diem)")
+                logger.debug("[matcher] bien ban/hop → appendix (not kiem diem)")
                 return MatchResult("", 0.0, "PHU_LUC_NGHI_QUYET", "appendix")
 
         for pat, kind in _APPENDIX_PATTERNS:
@@ -573,11 +586,14 @@ def refine_unknown_group_types(
     Returns số group được gán lại catalog.
     """
     from pipeline.doc_identity import (
+        looks_like_danh_gia_phan_loai,
         looks_like_kiem_diem_header,
         looks_like_ly_lich_header,
         looks_like_phieu_bo_sung,
         looks_like_phieu_dang_vien,
         looks_like_quyet_dinh_or_nghi_quyet,
+        looks_like_standalone_minutes,
+        looks_like_van_bang_chung_chi,
     )
 
     matcher = get_matcher()
@@ -613,6 +629,9 @@ def refine_unknown_group_types(
                 continue
             header_blob += "\n" + (getattr(sig, "header_text", "") or "")
             full_blob += "\n" + ((getattr(sig, "full_text", "") or "")[:600])
+        # Biên bản họp / listing → không ép catalog
+        if looks_like_standalone_minutes(header_blob, full_blob):
+            continue
         result = matcher.match(
             header_blob,
             full_blob,
@@ -620,7 +639,11 @@ def refine_unknown_group_types(
         )
         new_key = (result.doc_type_key or "").upper()
         if not (new_key and new_key in PARTY_DOC_CATALOG):
-            if looks_like_phieu_bo_sung(header_blob, full_blob):
+            if looks_like_van_bang_chung_chi(header_blob, full_blob):
+                new_key = "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON"
+            elif looks_like_danh_gia_phan_loai(header_blob, full_blob):
+                new_key = "BAN_TU_KIEM_DIEM_HANG_NAM"
+            elif looks_like_phieu_bo_sung(header_blob, full_blob):
                 new_key = "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
             elif looks_like_phieu_dang_vien(header_blob, full_blob):
                 new_key = "PHIEU_DANG_VIEN"

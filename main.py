@@ -576,6 +576,32 @@ def main() -> int:
     except Exception as eex:
         logger.error(f"Eject KHAC noise failed: {eex}")
 
+    # Gỡ biên bản họp bị gắn nhầm vào kiểm điểm (vd. họp chi đoàn)
+    try:
+        from pipeline.page_audit import scrub_minutes_misclassified_as_kiem_diem
+
+        groups, orphan_pages, n_min = scrub_minutes_misclassified_as_kiem_diem(
+            groups, all_signals, orphan_pages
+        )
+        if n_min:
+            logger.info(
+                f"Scrubbed {n_min} minutes pages out of kiem_diem → orphans"
+            )
+    except Exception as mex:
+        logger.error(f"Minutes-from-kiem_diem scrub failed: {mex}")
+
+    # Gắn mảnh KHAC 1 trang vào kiểm điểm liền kề
+    try:
+        from pipeline.page_audit import absorb_unknown_into_adjacent_kiem_diem
+
+        groups, n_abs_khac = absorb_unknown_into_adjacent_kiem_diem(
+            groups, all_signals
+        )
+        if n_abs_khac:
+            logger.info(f"Absorbed {n_abs_khac} KHAC fragments into kiem_diem")
+    except Exception as aex:
+        logger.error(f"Absorb KHAC into kiem_diem failed: {aex}")
+
     # Post-classify nhóm CHUA_XAC_DINH → catalog nếu match được
     try:
         from pipeline.party_doc_matcher import refine_unknown_group_types
@@ -585,6 +611,21 @@ def main() -> int:
             logger.info(f"Refined {n_refined} CHUA_XAC_DINH groups → catalog")
     except Exception as rex:
         logger.error(f"Refine unknown types failed: {rex}")
+
+    # Pass lại reattach/promote sau eject/scrub (QĐ tiếp, phiếu nơi cư trú, văn bằng)
+    try:
+        from pipeline.orphan_reattacher import promote_orphans_to_groups, reattach_orphans
+
+        groups, orphan_pages, _dec2 = reattach_orphans(
+            groups, orphan_pages, all_signals
+        )
+        groups, orphan_pages, n_prom2 = promote_orphans_to_groups(
+            groups, orphan_pages, all_signals
+        )
+        if n_prom2:
+            logger.info(f"Second-pass promoted {n_prom2} orphan pages → groups")
+    except Exception as rex:
+        logger.error(f"Second-pass reattach/promote failed: {rex}")
 
     # Audit đủ trang trước export
     page_audit_report: dict = {}

@@ -45,6 +45,11 @@ def orphan_review_stem(page_num: int, signal: Optional[Any] = None) -> str:
     if "muc luc" in blob and "tai lieu" in blob:
         return f"MUC_LUC_{suffix}"
 
+    from pipeline.doc_identity import looks_like_ban_giao_listing
+
+    if looks_like_ban_giao_listing(header, full):
+        return f"MUC_LUC_{suffix}"
+
     return f"ORPHAN_{suffix}"
 
 
