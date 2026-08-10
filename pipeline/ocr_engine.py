@@ -1,9 +1,13 @@
-"""Module 3: OCR with PaddleOCR (Vietnamese, CPU mode)."""
+"""Module 3: OCR with PaddleOCR (Vietnamese) — auto GPU/CPU."""
 
 from __future__ import annotations
 
+import os
+import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Optional, Union
 
 import numpy as np
 from loguru import logger
@@ -19,119 +23,222 @@ class OCRBlock:
     center_y: float  # vertical center of bbox, normalized 0.0-1.0
 
 
+def _normalize_gpu_pref(use_gpu: Union[bool, str, None]) -> str:
+    """Chuẩn hóa preference → 'auto' | 'gpu' | 'cpu'."""
+    if use_gpu is None:
+        use_gpu = getattr(config, "OCR_USE_GPU", "auto")
+    if isinstance(use_gpu, bool):
+        return "gpu" if use_gpu else "cpu"
+    s = str(use_gpu).strip().lower()
+    if s in {"1", "true", "yes", "gpu"}:
+        return "gpu"
+    if s in {"0", "false", "no", "cpu"}:
+        return "cpu"
+    return "auto"
+
+
+def _nvidia_free_mb() -> Optional[int]:
+    """MB VRAM trống trên GPU 0 (nvidia-smi). None nếu không đọc được."""
+    try:
+        out = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+        first = (out or "").strip().splitlines()[0].strip()
+        return int(re.sub(r"[^\d]", "", first) or "0")
+    except Exception:
+        return None
+
+
+def detect_gpu_ready(
+    min_free_mb: Optional[int] = None,
+) -> tuple[bool, str]:
+    """
+    True nếu Paddle CUDA sẵn sàng và (nếu check được) còn đủ VRAM trống.
+    """
+    min_free = int(
+        min_free_mb
+        if min_free_mb is not None
+        else getattr(config, "OCR_GPU_MIN_FREE_MB", 1500)
+    )
+    try:
+        import paddle
+
+        if not paddle.device.is_compiled_with_cuda():
+            return False, "paddle_not_compiled_with_cuda"
+        if paddle.device.cuda.device_count() <= 0:
+            return False, "cuda_device_count_0"
+    except Exception as exc:
+        return False, f"paddle_cuda_check_failed:{exc}"
+
+    free_mb = _nvidia_free_mb()
+    if free_mb is not None and free_mb < min_free:
+        return (
+            False,
+            f"vram_low free={free_mb}MB < min={min_free}MB (có thể Ollama đang chiếm)",
+        )
+    if free_mb is not None:
+        return True, f"cuda_ok free_vram={free_mb}MB"
+    return True, "cuda_ok"
+
+
+def resolve_ocr_use_gpu(
+    use_gpu: Union[bool, str, None] = None,
+) -> tuple[bool, str]:
+    """
+    Quyết định có dùng GPU không.
+    Returns (use_gpu: bool, reason: str).
+    """
+    pref = _normalize_gpu_pref(use_gpu)
+    if pref == "cpu":
+        return False, "forced_cpu"
+    ready, detail = detect_gpu_ready()
+    if ready:
+        return True, f"prefer_{pref}:{detail}"
+    if pref == "gpu":
+        # Vẫn thử GPU — caller có thể fallback nếu init fail
+        return True, f"forced_gpu_despite:{detail}"
+    return False, f"auto_cpu:{detail}"
+
+
 class OCREngine:
     """Run OCR on page images using PaddleOCR."""
 
     def __init__(
         self,
         lang: str = config.OCR_LANG,
-        use_gpu: bool = config.OCR_USE_GPU,
+        use_gpu: Union[bool, str, None] = None,
     ) -> None:
         """
         Initialize PaddleOCR.
         Models auto-download on first run.
         Compatible with PaddleOCR 3.x (device=...) and legacy 2.x kwargs.
+
+        use_gpu: True/False/"auto"/None — None lấy từ config.OCR_USE_GPU.
+        Có GPU thì dùng GPU; không có / thiếu VRAM / init fail → CPU.
         """
+        if use_gpu is None:
+            use_gpu = getattr(config, "OCR_USE_GPU", "auto")
         self.lang = lang
-        self.use_gpu = use_gpu
         self.ocr = None
         self._api_version = 3
 
-        try:
-            import os
+        want_gpu, why = resolve_ocr_use_gpu(use_gpu)
+        logger.info(f"[ocr] device preference → gpu={want_gpu} ({why})")
 
-            # Tắt OneDNN/MKLDNN TRƯỚC khi import paddle (tránh lỗi
-            # ConvertPirAttribute2RuntimeAttribute trên Linux CPU).
-            os.environ["FLAGS_use_mkldnn"] = "0"
-            os.environ["FLAGS_onednn"] = "0"
-            os.environ["FLAGS_use_mkldnn_bfloat16"] = "0"
-            os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-            # Ép chạy CPU nếu GPU không sẵn sàng / user tắt GPU
-            if not use_gpu:
-                os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
-            from paddleocr import PaddleOCR
-
-            # Kiểm tra GPU thật sự dùng được
-            gpu_ok = False
-            if use_gpu:
-                try:
-                    import paddle
-
-                    gpu_ok = bool(paddle.device.is_compiled_with_cuda()) and (
-                        paddle.device.cuda.device_count() > 0
-                    )
-                except Exception:
-                    gpu_ok = False
-                if not gpu_ok:
-                    logger.warning(
-                        "OCR_USE_GPU=True nhưng CUDA không khả dụng — fallback CPU "
-                        "(FLAGS_use_mkldnn=0)"
-                    )
-                    use_gpu = False
-                    self.use_gpu = False
-                    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
+        # Thử GPU trước; fail → CPU (trừ khi đã chọn CPU sẵn)
+        tried_gpu = False
+        last_exc: Optional[BaseException] = None
+        if want_gpu:
+            tried_gpu = True
             try:
-                import paddle
-
-                paddle.set_flags({"FLAGS_use_mkldnn": False})
-            except Exception:
-                pass
-
-            device = "gpu:0" if use_gpu else "cpu"
-
-            # PaddleOCR 3.x API
-            kwargs_v3: dict = {
-                "lang": lang,
-                "use_textline_orientation": True,
-                "use_doc_orientation_classify": False,
-                "use_doc_unwarping": False,
-                "device": device,
-                "enable_mkldnn": False,
-            }
-
-            det_dir = config.MODELS_DIR / "det"
-            rec_dir = config.MODELS_DIR / "rec"
-            cls_dir = config.MODELS_DIR / "cls"
-            if det_dir.is_dir() and any(det_dir.iterdir()):
-                kwargs_v3["text_detection_model_dir"] = str(det_dir)
-            if rec_dir.is_dir() and any(rec_dir.iterdir()):
-                kwargs_v3["text_recognition_model_dir"] = str(rec_dir)
-            if cls_dir.is_dir() and any(cls_dir.iterdir()):
-                kwargs_v3["textline_orientation_model_dir"] = str(cls_dir)
-
-            try:
-                self.ocr = PaddleOCR(**kwargs_v3)
-                self._api_version = 3
-            except (TypeError, ValueError) as init_exc:
-                # Fallback for older PaddleOCR 2.x
+                self._init_paddle(lang=lang, use_gpu=True)
+                return
+            except Exception as exc:
+                last_exc = exc
                 logger.warning(
-                    f"PaddleOCR 3.x init failed ({init_exc}); trying 2.x API"
+                    f"[ocr] GPU init failed ({exc}) — fallback CPU"
                 )
-                kwargs_v2: dict = {
-                    "use_angle_cls": True,
-                    "lang": lang,
-                    "use_gpu": use_gpu,
-                    "show_log": False,
-                    "enable_mkldnn": False,
-                }
-                if det_dir.is_dir() and any(det_dir.iterdir()):
-                    kwargs_v2["det_model_dir"] = str(det_dir)
-                if rec_dir.is_dir() and any(rec_dir.iterdir()):
-                    kwargs_v2["rec_model_dir"] = str(rec_dir)
-                if cls_dir.is_dir() and any(cls_dir.iterdir()):
-                    kwargs_v2["cls_model_dir"] = str(cls_dir)
-                self.ocr = PaddleOCR(**kwargs_v2)
-                self._api_version = 2
 
-            logger.info(
-                f"PaddleOCR initialized (lang={lang}, device={device}, "
-                f"api=v{self._api_version}, mkldnn=off)"
-            )
+        try:
+            self._init_paddle(lang=lang, use_gpu=False)
         except Exception as exc:
+            if last_exc is not None:
+                logger.error(f"[ocr] CPU fallback also failed after GPU error: {last_exc}")
             logger.error(f"Failed to initialize PaddleOCR: {exc}")
             raise
+
+        if tried_gpu:
+            logger.info("[ocr] running on CPU after GPU fallback")
+
+    def _init_paddle(self, *, lang: str, use_gpu: bool) -> None:
+        """Khởi tạo PaddleOCR trên device chỉ định (raise nếu fail)."""
+        self.use_gpu = use_gpu
+
+        # Tắt OneDNN/MKLDNN TRƯỚC khi import paddle
+        os.environ["FLAGS_use_mkldnn"] = "0"
+        os.environ["FLAGS_onednn"] = "0"
+        os.environ["FLAGS_use_mkldnn_bfloat16"] = "0"
+        os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
+        if use_gpu:
+            # Đừng để env cũ ép trống GPU
+            if os.environ.get("CUDA_VISIBLE_DEVICES", None) == "":
+                os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+        from paddleocr import PaddleOCR
+
+        if use_gpu:
+            import paddle
+
+            if not paddle.device.is_compiled_with_cuda():
+                raise RuntimeError("paddle not compiled with CUDA")
+            if paddle.device.cuda.device_count() <= 0:
+                raise RuntimeError("no CUDA device visible to paddle")
+
+        try:
+            import paddle
+
+            paddle.set_flags({"FLAGS_use_mkldnn": False})
+        except Exception:
+            pass
+
+        device = "gpu:0" if use_gpu else "cpu"
+
+        kwargs_v3: dict[str, Any] = {
+            "lang": lang,
+            "use_textline_orientation": True,
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "device": device,
+            "enable_mkldnn": False,
+        }
+
+        det_dir = config.MODELS_DIR / "det"
+        rec_dir = config.MODELS_DIR / "rec"
+        cls_dir = config.MODELS_DIR / "cls"
+        if det_dir.is_dir() and any(det_dir.iterdir()):
+            kwargs_v3["text_detection_model_dir"] = str(det_dir)
+        if rec_dir.is_dir() and any(rec_dir.iterdir()):
+            kwargs_v3["text_recognition_model_dir"] = str(rec_dir)
+        if cls_dir.is_dir() and any(cls_dir.iterdir()):
+            kwargs_v3["textline_orientation_model_dir"] = str(cls_dir)
+
+        try:
+            self.ocr = PaddleOCR(**kwargs_v3)
+            self._api_version = 3
+        except (TypeError, ValueError) as init_exc:
+            logger.warning(
+                f"PaddleOCR 3.x init failed ({init_exc}); trying 2.x API"
+            )
+            kwargs_v2: dict[str, Any] = {
+                "use_angle_cls": True,
+                "lang": lang,
+                "use_gpu": use_gpu,
+                "show_log": False,
+                "enable_mkldnn": False,
+            }
+            if det_dir.is_dir() and any(det_dir.iterdir()):
+                kwargs_v2["det_model_dir"] = str(det_dir)
+            if rec_dir.is_dir() and any(rec_dir.iterdir()):
+                kwargs_v2["rec_model_dir"] = str(rec_dir)
+            if cls_dir.is_dir() and any(cls_dir.iterdir()):
+                kwargs_v2["cls_model_dir"] = str(cls_dir)
+            self.ocr = PaddleOCR(**kwargs_v2)
+            self._api_version = 2
+
+        logger.info(
+            f"PaddleOCR initialized (lang={lang}, device={device}, "
+            f"api=v{self._api_version}, mkldnn=off)"
+        )
 
     def _parse_v3_result(self, result: object, height: int) -> list[OCRBlock]:
         """Parse PaddleOCR 3.x / PaddleX OCRResult objects."""

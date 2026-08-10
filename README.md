@@ -21,7 +21,8 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
-> **GPU:** đặt `OCR_USE_GPU = True` trong `config.py`. Có thể cần `paddlepaddle-gpu`.
+> **GPU:** mặc định `OCR_USE_GPU = "auto"` — có CUDA + đủ VRAM thì GPU, không thì CPU.
+> Ép tay: `python main.py ... --gpu` hoặc `--cpu`.
 
 ## First run
 

@@ -119,6 +119,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Bật Rule 3 LLM trong ContinuationValidator (cần Ollama)",
     )
+    device = parser.add_mutually_exclusive_group()
+    device.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Ép OCR dùng GPU (init fail → vẫn fallback CPU)",
+    )
+    device.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Ép OCR dùng CPU",
+    )
     return parser.parse_args()
 
 
@@ -305,7 +316,13 @@ def main() -> int:
     ocr = None
     if not cache_full:
         try:
-            ocr = OCREngine(lang=config.OCR_LANG, use_gpu=config.OCR_USE_GPU)
+            if getattr(args, "cpu", False):
+                ocr_device: bool | str = False
+            elif getattr(args, "gpu", False):
+                ocr_device = True
+            else:
+                ocr_device = getattr(config, "OCR_USE_GPU", "auto")
+            ocr = OCREngine(lang=config.OCR_LANG, use_gpu=ocr_device)
         except Exception as exc:
             logger.error(f"Failed to initialize OCR: {exc}")
             ingestor.close()

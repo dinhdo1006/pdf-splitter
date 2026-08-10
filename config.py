@@ -19,7 +19,11 @@ CLAHE_TILE_SIZE = (8, 8)
 
 # ── OCR ────────────────────────────────────────────────────────────
 OCR_LANG = "vi"
-OCR_USE_GPU = True
+# "auto" = ưu tiên GPU nếu CUDA còn trống; không được thì CPU.
+# True / "gpu" = ép GPU (vẫn fallback CPU nếu init fail).
+# False / "cpu" = ép CPU.
+OCR_USE_GPU = "auto"
+OCR_GPU_MIN_FREE_MB = 1500  # Dưới ngưỡng này (Ollama đầy VRAM) → chọn CPU
 OCR_MIN_CONFIDENCE = 0.40  # Discard blocks below this confidence
 
 # ── Signal Extraction ──────────────────────────────────────────────
