@@ -197,13 +197,14 @@ def resolve_docs_dir(
         m3=m3,
         m4=m4,
         m5=m5,
-        so_cccd=merged.cccd,
+        so_cccd=merged.folder_id,
         ho_ten_dang_vien=merged.ho_ten,
     )
     member_dir = builder.ensure_dirs()
+    id_kind = "cccd" if merged.cccd else "tdv_fallback"
     logger.info(
         f"Phụ lục 2 member dir: {member_dir} "
-        f"(ho_ten={merged.ho_ten!r}, cccd={merged.cccd!r}, "
+        f"(ho_ten={merged.ho_ten!r}, {id_kind}={merged.folder_id!r}, "
         f"conf={merged.confidence:.2f})"
     )
     return member_dir
@@ -532,6 +533,21 @@ def main() -> int:
             )
     except Exception as pex:
         logger.error(f"Promote orphans failed: {pex}")
+
+    # Pass-2c: hút orphan sau form đã chạm soft-max (mid-page phiếu…)
+    try:
+        from pipeline.orphan_reattacher import absorb_trailing_orphans_after_capped_forms
+
+        groups, orphan_pages, n_abs = absorb_trailing_orphans_after_capped_forms(
+            groups, orphan_pages, all_signals
+        )
+        if n_abs:
+            logger.info(
+                f"Absorbed {n_abs} trailing orphan pages after capped forms "
+                f"({len(orphan_pages)} orphans left)"
+            )
+    except Exception as aex:
+        logger.error(f"Absorb trailing orphans failed: {aex}")
 
     # Post-classify nhóm CHUA_XAC_DINH → catalog nếu match được
     try:

@@ -54,6 +54,9 @@ DOC_TYPE_SOFT_MAX_PAGES = {
     "BAN_TU_KIEM_DIEM_DANG_VIEN_VI_PHAM": 8,
 }
 
+# Khi hồ sơ không có CCCD trong OCR, dùng số TĐV làm khóa thư mục Phụ lục 2
+IDENTITY_ALLOW_TDV_AS_FOLDER_KEY = True
+
 # ── Scoring Weights ────────────────────────────────────────────────
 SCORE_HAS_KEYWORD = +0.45
 SCORE_HAS_LARGE_CENTERED = +0.25

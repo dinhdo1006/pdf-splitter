@@ -369,6 +369,93 @@ def _judge_orphan(
     )
 
 
+def absorb_trailing_orphans_after_capped_forms(
+    groups: list[DocumentGroup],
+    orphan_pages: list[int],
+    all_signals: dict[int, PageSignal],
+) -> tuple[list[DocumentGroup], list[int], int]:
+    """
+    Sau soft-max: orphan liền sau group form đã đầy cap → mở group mới cùng loại
+    và hút chuỗi mid-page (vd. phiếu 144–149 cap → 150–170 thành phiếu mới).
+    """
+    if not orphan_pages or not groups:
+        return groups, orphan_pages, 0
+
+    orphan_set = set(orphan_pages)
+    used: set[int] = set()
+    new_groups: list[DocumentGroup] = []
+    next_id = max((g.group_id for g in groups), default=0) + 1
+    promoted = 0
+
+    # Index group theo trang cuối
+    end_page_to_group: dict[int, DocumentGroup] = {}
+    for g in groups:
+        if g.page_numbers:
+            end_page_to_group[max(g.page_numbers)] = g
+
+    for end_pn in sorted(end_page_to_group.keys()):
+        g = end_page_to_group[end_pn]
+        dtype = (g.doc_type or "").upper()
+        if dtype not in MULTI_PAGE_FORM_TYPES and not dtype.startswith("BAN_TU_KIEM"):
+            continue
+        max_soft = soft_max_pages_for(dtype)
+        if max_soft is None or len(g.page_numbers) < max_soft:
+            continue
+        start = end_pn + 1
+        if start not in orphan_set or start in used:
+            continue
+        sig0 = all_signals.get(start)
+        if sig0 is None or getattr(sig0, "is_toc", False):
+            continue
+        if _looks_like_standalone_minutes(sig0):
+            continue
+        # Không hút nếu orphan đã có loại khác rõ
+        inferred = _infer_orphan_doc_type(sig0)
+        if inferred and inferred != dtype:
+            continue
+
+        chain = [start]
+        used.add(start)
+        cur = start + 1
+        while cur in orphan_set and cur not in used:
+            sig_n = all_signals.get(cur)
+            if sig_n is None or getattr(sig_n, "is_toc", False):
+                break
+            if _looks_like_standalone_minutes(sig_n):
+                break
+            inferred_n = _infer_orphan_doc_type(sig_n)
+            if inferred_n and inferred_n != dtype:
+                break
+            if (getattr(sig_n, "text_density", 0) or 0) < 0.008:
+                break
+            chain.append(cur)
+            used.add(cur)
+            cur += 1
+            if max_soft is not None and len(chain) >= max_soft:
+                break
+
+        ng = DocumentGroup(
+            group_id=next_id,
+            raw_title=(getattr(sig0, "header_text", "") or "")[:200],
+            doc_type=dtype,
+            page_numbers=list(chain),
+            page_size_group=getattr(sig0, "page_size_group", g.page_size_group)
+            or "OTHER",
+        )
+        next_id += 1
+        new_groups.append(ng)
+        promoted += len(chain)
+        logger.info(
+            f"[absorb] after capped {dtype} @{end_pn}: pages "
+            f"{chain[0]}-{chain[-1]} → group #{ng.group_id}"
+        )
+
+    if not new_groups:
+        return groups, orphan_pages, 0
+    remaining = [p for p in orphan_pages if p not in used]
+    return list(groups) + new_groups, remaining, promoted
+
+
 def decisions_to_dicts(decisions: list[ReattachDecision]) -> list[dict]:
     return [asdict(d) for d in decisions]
 

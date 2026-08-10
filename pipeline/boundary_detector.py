@@ -721,6 +721,12 @@ class BoundaryDetector:
             open_pages = (
                 len(self._current_group.page_numbers) if self._current_group else 0
             )
+            max_soft = soft_max_pages_for(open_doc_type)
+            at_soft_max = (
+                self._current_group is not None
+                and max_soft is not None
+                and open_pages >= max_soft
+            )
             verdict = self.validator.validate(
                 self._prev_signal,
                 signal,
@@ -729,9 +735,12 @@ class BoundaryDetector:
                 open_doc_type=open_doc_type,
                 open_page_count=open_pages,
             )
-            if verdict.is_continuation:
+            if verdict.is_continuation or at_soft_max:
                 page_class, reasoning = self._continue_or_new_or_orphan(
-                    signal, score, score_reason, verdict.reason
+                    signal,
+                    score,
+                    score_reason,
+                    verdict.reason if verdict.is_continuation else "open_at_soft_max",
                 )
             else:
                 self._mark_orphan(signal, verdict.reason)

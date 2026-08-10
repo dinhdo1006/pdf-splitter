@@ -148,15 +148,8 @@ class ContinuationValidator:
                 False, "none", "quyet_dinh_no_soft_continuation", 0.0
             )
 
-        # Chạm soft-max → không Rule2 soft midpage
-        max_soft = soft_max_pages_for(open_key) if has_open_group else None
-        if (
-            max_soft is not None
-            and open_page_count >= max_soft
-        ):
-            return ContinuationVerdict(
-                False, "none", f"open_at_soft_max({max_soft})", 0.0
-            )
+        # Chạm soft-max → KHÔNG reject ở đây.
+        # Để Rule2/append xử lý; boundary sẽ split NEW cùng loại thay vì orphan.
 
         # Không soft-cont biên bản / QĐ / nghị quyết vào phiếu ĐV
         if has_open_group and open_key == "PHIEU_DANG_VIEN":
@@ -332,11 +325,7 @@ class ContinuationValidator:
             return ContinuationVerdict(False, "rule2", "curr_has_keyword", 0.0)
 
         doc_key = (open_doc_type or "").upper()
-        max_soft = soft_max_pages_for(doc_key) if has_open_group else None
-        if max_soft is not None and open_page_count >= max_soft:
-            return ContinuationVerdict(
-                False, "rule2", f"open_at_soft_max({max_soft})", 0.0
-            )
+        # Soft-max: vẫn cho Rule2 trả continuation — boundary sẽ split NEW
 
         # B2 trước — cache OCR không có bbox; phiếu/kiểm điểm vẫn soft-cont
         if (

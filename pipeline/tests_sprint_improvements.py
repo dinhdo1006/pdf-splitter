@@ -826,6 +826,50 @@ def test_identity_dot_ocr_name() -> None:
     print("  OK  identity_dot_ocr_name")
 
 
+def test_identity_pham_huu_luat_and_tdv_fallback() -> None:
+    from pipeline.identity_extractor import extract_member_identity_from_text
+
+    stuck = extract_member_identity_from_text(
+        "Ho va ten (viet chu in hoa): PHAM HUU LUATSinh ngay 26 thang 3 nam 1966\n"
+        "So TDV: 2772699\n",
+        source="stuck",
+    )
+    assert stuck.ho_ten is not None and "Luat" in stuck.ho_ten, stuck
+    assert stuck.tdv == "2772699"
+    assert stuck.has_member_folder_keys
+    assert stuck.folder_id == "2772699"
+
+    caps = extract_member_identity_from_text(
+        "PHAM HUY LUAT\nHo va ten (vit ch in hoa):\nSinh ngay 26\nSo TDV: 5028110\n",
+        source="caps",
+    )
+    assert caps.ho_ten is not None and "Pham" in caps.ho_ten, caps
+    print("  OK  identity_pham_huu_luat_and_tdv_fallback")
+
+
+def test_absorb_trailing_after_soft_max() -> None:
+    from pipeline.orphan_reattacher import absorb_trailing_orphans_after_capped_forms
+
+    g = DocumentGroup(
+        group_id=1,
+        raw_title="phieu",
+        doc_type="PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        page_numbers=[144, 145, 146, 147, 148, 149],
+        page_size_group="A4_PORTRAIT",
+    )
+    signals = {
+        pn: _sig(pn, size="A4_PORTRAIT", header="tai san", full="nha dat gia tri")
+        for pn in range(144, 157)
+    }
+    groups, orphans, n = absorb_trailing_orphans_after_capped_forms(
+        [g], list(range(150, 157)), signals
+    )
+    assert n >= 1
+    assert any(150 in gg.page_numbers for gg in groups)
+    assert 150 not in orphans
+    print("  OK  absorb_trailing_after_soft_max")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -866,6 +910,8 @@ def main() -> int:
         test_reattach_respects_soft_max,
         test_promote_orphans_to_groups,
         test_identity_dot_ocr_name,
+        test_identity_pham_huu_luat_and_tdv_fallback,
+        test_absorb_trailing_after_soft_max,
     ]
     failed = 0
     for t in tests:
