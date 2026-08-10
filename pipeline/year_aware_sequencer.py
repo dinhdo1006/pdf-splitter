@@ -115,9 +115,23 @@ def extract_year_robust(text: str) -> Optional[int]:
         return None
 
     fixed = _apply_ocr_fixup(text)
+    # Che cụm ngày sinh để không lấy DOB làm năm văn bản
+    fixed_no_dob = re.sub(
+        r"(?:ng[àa]y\s*)?sinh(?:\s*ng[àa]y)?\s*[:\.]?\s*"
+        r"(?:\d{1,2}\s*)?[/\-\.]?(?:\d{1,2}\s*)?[/\-\.]?\d{0,4}",
+        " ",
+        fixed,
+        flags=re.IGNORECASE,
+    )
+    fixed_no_dob = re.sub(
+        r"sinh\s*[:\.]?\s*\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4}",
+        " ",
+        fixed_no_dob,
+        flags=re.IGNORECASE,
+    )
 
     # Pattern 1 — "năm 2024" / "nam 2024"
-    for m in re.finditer(r"n[aă]m\s+(\d{4})", fixed, re.IGNORECASE):
+    for m in re.finditer(r"n[aă]m\s+(\d{4})", fixed_no_dob, re.IGNORECASE):
         try:
             y = int(m.group(1))
             if _is_valid_year(y):
@@ -127,7 +141,9 @@ def extract_year_robust(text: str) -> Optional[int]:
 
     # Pattern 2 — "ngày DD/MM/YYYY" hoặc DD-MM-YYYY / DD.MM.YYYY
     for m in re.finditer(
-        r"ng[àa]y\s+\d{1,2}[/\-\.]\d{1,2}[/\-\.](\d{4})", fixed, re.IGNORECASE
+        r"ng[àa]y\s+\d{1,2}[/\-\.]\d{1,2}[/\-\.](\d{4})",
+        fixed_no_dob,
+        re.IGNORECASE,
     ):
         try:
             y = int(m.group(1))
@@ -139,7 +155,7 @@ def extract_year_robust(text: str) -> Optional[int]:
     # Pattern 2b — "ngày 06 tháng 01 năm 1995" / "thang 01 nam 1995"
     for m in re.finditer(
         r"(?:ng[àa]y\s+\d{1,2}\s+)?th[aá]ng\s+\d{1,2}\s+n[aă]m\s+(\d{4})",
-        fixed,
+        fixed_no_dob,
         re.IGNORECASE,
     ):
         try:
@@ -150,7 +166,7 @@ def extract_year_robust(text: str) -> Optional[int]:
             continue
 
     # Pattern 2c — bare DD/MM/YYYY
-    for m in re.finditer(r"\b\d{1,2}[/\-\.]\d{1,2}[/\-\.](\d{4})\b", fixed):
+    for m in re.finditer(r"\b\d{1,2}[/\-\.]\d{1,2}[/\-\.](\d{4})\b", fixed_no_dob):
         try:
             y = int(m.group(1))
             if _is_valid_year(y):
@@ -159,7 +175,7 @@ def extract_year_robust(text: str) -> Optional[int]:
             continue
 
     # Pattern 3 — số 4 chữ số đứng riêng (ưu tiên thấp nhất — lấy cái đầu tiên hợp lệ)
-    for m in re.finditer(r"\b(\d{4})\b", fixed):
+    for m in re.finditer(r"\b(\d{4})\b", fixed_no_dob):
         try:
             y = int(m.group(1))
             if _is_valid_year(y):

@@ -58,6 +58,9 @@ def scrub_mismatched_form_pages(
     """
     Gỡ trang lệch loại khỏi group form (vd. phiếu ĐV dính vào lý lịch).
     Trang lệch → DocumentGroup mới theo loại suy ra.
+
+    Chỉ peel từ LY_LICH / CHUA_XAC_DINH / PHIEU_* khi gặp header form khác rõ
+    (kiểm điểm / phiếu / QĐ). Không peel mid-page yếu.
     """
     from pipeline.doc_identity import (
         looks_like_kiem_diem_header,
@@ -67,17 +70,47 @@ def scrub_mismatched_form_pages(
     )
 
     ll_types = {"LY_LICH_DANG_VIEN", "LY_LICH_NGUOI_XIN_VAO_DANG"}
+    peel_hosts = ll_types | {
+        "CHUA_XAC_DINH",
+        "",
+        "PHIEU_DANG_VIEN",
+        "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+    }
+
+    def _strong_kiem_diem(header: str, full: str) -> bool:
+        """Chỉ header bản kiểm điểm — tránh dính chữ 'kiểm điểm' mid-page."""
+        from unidecode import unidecode
+
+        blob = unidecode((header or "")[:350]).lower()
+        return any(
+            x in blob
+            for x in (
+                "ban kiem diem",
+                "ban tu kiem diem",
+                "ban kiem diem dang vien",
+                "ban kiem diem ca nhan",
+                "tu kiem diem hang nam",
+            )
+        )
 
     def _foreign_type(host: str, header: str, full: str) -> str | None:
         host_u = (host or "").upper()
+        if host_u not in peel_hosts and not host_u.startswith("PHIEU"):
+            return None
+        # Phiếu → chỉ peel kiểm điểm header mạnh (không dùng soft hints)
+        if host_u.startswith("PHIEU"):
+            if _strong_kiem_diem(header, full):
+                return "BAN_TU_KIEM_DIEM_HANG_NAM"
+            return None
         if looks_like_phieu_bo_sung(header, full) and "PHIEU_BO_SUNG" not in host_u:
             return "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
         if looks_like_phieu_dang_vien(header, full) and "PHIEU" not in host_u:
             return "PHIEU_DANG_VIEN"
-        if looks_like_kiem_diem_header(header, full) and not host_u.startswith(
-            "BAN_TU_KIEM"
+        if _strong_kiem_diem(header, full) or (
+            host_u in ll_types and looks_like_kiem_diem_header(header, full)
         ):
-            return "BAN_TU_KIEM_DIEM_HANG_NAM"
+            if not host_u.startswith("BAN_TU_KIEM"):
+                return "BAN_TU_KIEM_DIEM_HANG_NAM"
         if looks_like_quyet_dinh_or_nghi_quyet(header, full) and host_u in ll_types:
             return "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
         return None

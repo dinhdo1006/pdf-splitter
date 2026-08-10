@@ -304,26 +304,65 @@ class BoundaryDetector:
                 PageClass.CONFIRMED_CONTINUATION,
                 f"confirmed_cont[{cont_reason}] | {score_reason}",
             )
-        # Soft-max vừa đóng group — ưu tiên mở NEW
+        # Soft-max vừa đóng group — ưu tiên mở NEW đúng loại (không copy loại cũ)
         if self._page_looks_like_new_form(signal):
+            if not signal.matched_doc_type:
+                h = signal.header_text or ""
+                f = signal.full_text or ""
+                if looks_like_kiem_diem_header(h, f):
+                    signal.matched_doc_type = "BAN_TU_KIEM_DIEM_HANG_NAM"
+                    signal.has_doc_keyword = True
+                elif looks_like_phieu_bo_sung(h, f):
+                    signal.matched_doc_type = "PHIEU_BO_SUNG_HO_SO_DANG_VIEN"
+                    signal.has_doc_keyword = True
+                elif looks_like_phieu_dang_vien(h, f):
+                    signal.matched_doc_type = "PHIEU_DANG_VIEN"
+                    signal.has_doc_keyword = True
+                elif looks_like_ly_lich_header(h, f):
+                    signal.matched_doc_type = "LY_LICH_DANG_VIEN"
+                    signal.has_doc_keyword = True
+                elif looks_like_quyet_dinh_or_nghi_quyet(h, f):
+                    signal.matched_doc_type = "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
+                    signal.has_doc_keyword = True
             self._open_new_group(
                 signal, score, f"after_soft_max|{cont_reason}|{score_reason}"
             )
             return PageClass.NEW_DOCUMENT, f"new[after_soft_max] | {score_reason}"
         # Form đa trang còn tiếp (cùng khổ / mid-page) → tách file mới cùng loại
+        # Không copy loại nếu trang đã là form khác (kiểm điểm / QĐ / biên bản)
         if self._groups:
             last = self._groups[-1]
             last_t = (last.doc_type or "").upper()
             if last_t in MULTI_PAGE_FORM_TYPES or last_t.startswith("BAN_TU_KIEM"):
+                h = signal.header_text or ""
+                f = signal.full_text or ""
+                if looks_like_kiem_diem_header(h, f) and not last_t.startswith(
+                    "BAN_TU_KIEM"
+                ):
+                    signal.matched_doc_type = "BAN_TU_KIEM_DIEM_HANG_NAM"
+                    signal.has_doc_keyword = True
+                    self._open_new_group(
+                        signal,
+                        score,
+                        f"split_kiem_diem_after_{last_t}|{score_reason}",
+                    )
+                    return (
+                        PageClass.NEW_DOCUMENT,
+                        f"new[split_kiem_diem] | {score_reason}",
+                    )
+                if looks_like_quyet_dinh_or_nghi_quyet(h, f):
+                    self._mark_orphan(signal, f"quyet_dinh_after_soft_max|{last_t}")
+                    return (
+                        PageClass.ORPHAN_PAGE,
+                        f"orphan[quyet_dinh_after_form] | {score_reason}",
+                    )
                 same_size = (
                     signal.page_size_group == last.page_size_group
                     and signal.page_size_group != "OTHER"
                 )
                 mid_like = (
                     not getattr(signal, "is_toc", False)
-                    and not looks_like_standalone_minutes(
-                        signal.header_text, signal.full_text or ""
-                    )
+                    and not looks_like_standalone_minutes(h, f)
                     and (signal.text_density or 0) >= 0.01
                 )
                 if same_size or mid_like:
@@ -633,8 +672,8 @@ class BoundaryDetector:
             is_new = True
             score_reason += "; +force_phieu_bo_sung"
 
-        # Force NEW: phiếu ĐV ↔ bổ sung, QĐ đổi số, single-page types
-        if self._current_group is not None and (effective_type or signal.matched_doc_type):
+        # Force NEW: phiếu ↔ kiểm điểm / QĐ… (kể cả khi chưa match catalog)
+        if self._current_group is not None:
             force, force_reason = should_force_new_document(
                 self._current_group.doc_type,
                 self._current_group.doc_year,
@@ -647,6 +686,25 @@ class BoundaryDetector:
             if force:
                 is_new = True
                 score_reason += f"; +force_new[{force_reason}]"
+                # Gán loại từ heuristic nếu catalog miss
+                if not (effective_type or signal.matched_doc_type):
+                    if looks_like_kiem_diem_header(
+                        signal.header_text, signal.full_text or ""
+                    ):
+                        signal.matched_doc_type = "BAN_TU_KIEM_DIEM_HANG_NAM"
+                        signal.has_doc_keyword = True
+                    elif looks_like_phieu_dang_vien(
+                        signal.header_text, signal.full_text or ""
+                    ):
+                        signal.matched_doc_type = "PHIEU_DANG_VIEN"
+                        signal.has_doc_keyword = True
+                    elif looks_like_quyet_dinh_or_nghi_quyet(
+                        signal.header_text, signal.full_text or ""
+                    ):
+                        signal.matched_doc_type = (
+                            "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM"
+                        )
+                        signal.has_doc_keyword = True
 
         # Form nhiều trang: tiêu đề catalog lặp lại trên trang tiếp → không NEW
         # Ngoại lệ: đổi page_size_group (vd. landscape sơ yếu → booklet lý lịch)

@@ -972,6 +972,72 @@ def test_merge_adjacent_same_year_phieu() -> None:
     print("  OK  merge_adjacent_same_year_phieu")
 
 
+def test_soft_max_does_not_copy_phieu_onto_kiem_diem() -> None:
+    """Sau soft-max phiếu, trang BAN KIEM DIEM phải NEW đúng loại — không copy PHIEU."""
+    det = BoundaryDetector()
+    for i in range(1, 7):
+        det.process_page(
+            _sig(
+                i,
+                size="A4_PORTRAIT",
+                matched="PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+                header="MAU 3 PHIEU BO SUNG",
+                full="phieu bo sung ho so",
+            )
+        )
+    d7 = det.process_page(
+        _sig(
+            7,
+            size="A4_PORTRAIT",
+            header="BAN KIEM DIEM DANG VIEN NAM 2012",
+            full="Ho va ten: Pham Huu Luat",
+            score=0.2,
+        )
+    )
+    assert d7.page_class == PageClass.NEW_DOCUMENT, d7.reasoning
+    groups, _ = det.finalize()
+    assert any(
+        g.doc_type == "BAN_TU_KIEM_DIEM_HANG_NAM" and 7 in g.page_numbers
+        for g in groups
+    ), [(g.doc_type, g.page_numbers) for g in groups]
+    assert not any(
+        g.doc_type.startswith("PHIEU") and 7 in g.page_numbers for g in groups
+    )
+    print("  OK  soft_max_does_not_copy_phieu_onto_kiem_diem")
+
+
+def test_year_ignores_ngay_sinh() -> None:
+    from pipeline.year_aware_sequencer import extract_year_robust
+
+    assert (
+        extract_year_robust(
+            "BAN KIEM DIEM CA NHAN NAM 2018\nHo va ten: Pham\nNgay sinh: 26/03/1966"
+        )
+        == 2018
+    )
+    assert (
+        extract_year_robust("Ho va ten Pham\nNgay sinh: 26/03/1966\nSoc Son")
+        != 1966
+    )
+    print("  OK  year_ignores_ngay_sinh")
+
+
+def test_force_phieu_to_kiem_diem_without_catalog() -> None:
+    from pipeline.doc_identity import should_force_new_document
+
+    force, reason = should_force_new_document(
+        "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
+        2011,
+        None,
+        3,
+        None,
+        "BAN KIEM DIEM DANG VIEN",
+        "Nam 2012",
+    )
+    assert force and "kiem_diem" in reason, (force, reason)
+    print("  OK  force_phieu_to_kiem_diem_without_catalog")
+
+
 def main() -> int:
     logger.remove()
     print("=" * 60)
@@ -1017,6 +1083,9 @@ def main() -> int:
         test_reattach_phieu_not_across_toc_into_ly_lich,
         test_scrub_phieu_out_of_ly_lich,
         test_merge_adjacent_same_year_phieu,
+        test_soft_max_does_not_copy_phieu_onto_kiem_diem,
+        test_year_ignores_ngay_sinh,
+        test_force_phieu_to_kiem_diem_without_catalog,
     ]
     failed = 0
     for t in tests:

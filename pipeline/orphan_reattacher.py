@@ -493,6 +493,19 @@ def absorb_trailing_orphans_after_capped_forms(
         inferred = _infer_orphan_doc_type(sig0)
         if inferred and inferred != dtype:
             continue
+        # Không bắt đầu chuỗi phiếu bằng header kiểm điểm / QĐ
+        from pipeline.doc_identity import (
+            looks_like_kiem_diem_header,
+            looks_like_quyet_dinh_or_nghi_quyet,
+        )
+
+        h0 = getattr(sig0, "header_text", "") or ""
+        f0 = getattr(sig0, "full_text", "") or ""
+        if dtype.startswith("PHIEU") and (
+            looks_like_kiem_diem_header(h0, f0)
+            or looks_like_quyet_dinh_or_nghi_quyet(h0, f0)
+        ):
+            continue
 
         chain = [start]
         used.add(start)
@@ -502,6 +515,13 @@ def absorb_trailing_orphans_after_capped_forms(
             if sig_n is None or getattr(sig_n, "is_toc", False):
                 break
             if _looks_like_standalone_minutes(sig_n):
+                break
+            hn = getattr(sig_n, "header_text", "") or ""
+            fn = getattr(sig_n, "full_text", "") or ""
+            if dtype.startswith("PHIEU") and (
+                looks_like_kiem_diem_header(hn, fn)
+                or looks_like_quyet_dinh_or_nghi_quyet(hn, fn)
+            ):
                 break
             inferred_n = _infer_orphan_doc_type(sig_n)
             if inferred_n and inferred_n != dtype:

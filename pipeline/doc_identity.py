@@ -231,6 +231,10 @@ def should_force_new_document(
             return True, "phieu_dv_to_minutes"
         if looks_like_quyet_dinh_or_nghi_quyet(curr_header, curr_full):
             return True, "phieu_dv_to_quyet_dinh"
+        if looks_like_kiem_diem_header(curr_header, curr_full) or curr_t.startswith(
+            "BAN_TU_KIEM"
+        ):
+            return True, "phieu_dv_to_kiem_diem"
         max_pd = soft_max_pages_for(open_t) or 6
         if open_page_count >= max_pd and (
             looks_like_phieu_dang_vien(curr_header, curr_full) or curr_t == open_t
@@ -253,6 +257,10 @@ def should_force_new_document(
                 return True, "phieu_bo_sung_new_form_header"
         if looks_like_kiem_diem_header(curr_header, curr_full):
             return True, "phieu_bo_sung_to_kiem_diem"
+        if looks_like_quyet_dinh_or_nghi_quyet(curr_header, curr_full):
+            return True, "phieu_bo_sung_to_quyet_dinh"
+        if looks_like_standalone_minutes(curr_header, curr_full):
+            return True, "phieu_bo_sung_to_minutes"
 
     # Bản tự kiểm điểm: năm khác hoặc chuyển sang phiếu bổ sung / form kiểm điểm mới
     if open_t.startswith("BAN_TU_KIEM"):
