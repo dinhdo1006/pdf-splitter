@@ -42,6 +42,18 @@ HEADER_SIMILARITY_THRESHOLD = 0.85  # token_sort_ratio above this → same doc
 CATALOG_FUZZY_THRESHOLD = 82  # party_doc_matcher partial_ratio
 CATALOG_MATCH_MIN_SCORE = 82  # min score to treat as NEW via catalog
 
+# Soft max trang / nhóm — chặn over-merge (boundary + reattach dùng chung)
+DOC_TYPE_SOFT_MAX_PAGES = {
+    "LY_LICH_DANG_VIEN": 18,
+    "LY_LICH_NGUOI_XIN_VAO_DANG": 18,
+    "PHIEU_DANG_VIEN": 6,
+    "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 6,
+    "BAN_TU_KIEM_DIEM_HANG_NAM": 8,
+    "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI": 8,
+    "BAN_TU_KIEM_DIEM_TAI_THOI_DIEM_CHUYEN": 8,
+    "BAN_TU_KIEM_DIEM_DANG_VIEN_VI_PHAM": 8,
+}
+
 # ── Scoring Weights ────────────────────────────────────────────────
 SCORE_HAS_KEYWORD = +0.45
 SCORE_HAS_LARGE_CENTERED = +0.25

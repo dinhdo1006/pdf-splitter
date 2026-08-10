@@ -36,9 +36,22 @@ MULTI_PAGE_FORM_TYPES = frozenset(
         "PHIEU_DANG_VIEN",
         "BAN_TU_KIEM_DIEM_HANG_NAM",
         "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI",
+        "BAN_TU_KIEM_DIEM_TAI_THOI_DIEM_CHUYEN",
+        "BAN_TU_KIEM_DIEM_DANG_VIEN_VI_PHAM",
         "CAC_VAN_BANG_CHUNG_CHI_CHUYEN_MON",
     }
 )
+
+
+def soft_max_pages_for(doc_type: Optional[str]) -> Optional[int]:
+    """Số trang tối đa soft-continue theo loại; None = không giới hạn."""
+    t = (doc_type or "").upper()
+    caps = getattr(config, "DOC_TYPE_SOFT_MAX_PAGES", {}) or {}
+    if t in caps:
+        return int(caps[t])
+    if t.startswith("BAN_TU_KIEM"):
+        return int(caps.get("BAN_TU_KIEM_DIEM_HANG_NAM", 8))
+    return None
 
 _PAGE_NUM_RE = re.compile(
     r"(?:trang|page)\s*(\d+)\s*/\s*(\d+)",
@@ -111,6 +124,7 @@ class ContinuationValidator:
         llm_referee: Any = None,
         has_open_group: bool = False,
         open_doc_type: Optional[str] = None,
+        open_page_count: int = 0,
     ) -> ContinuationVerdict:
         """
         Returns:
@@ -132,6 +146,16 @@ class ContinuationValidator:
         if has_open_group and open_key.startswith("QUYET_DINH"):
             return ContinuationVerdict(
                 False, "none", "quyet_dinh_no_soft_continuation", 0.0
+            )
+
+        # Chạm soft-max → không Rule2 soft midpage
+        max_soft = soft_max_pages_for(open_key) if has_open_group else None
+        if (
+            max_soft is not None
+            and open_page_count >= max_soft
+        ):
+            return ContinuationVerdict(
+                False, "none", f"open_at_soft_max({max_soft})", 0.0
             )
 
         # Không soft-cont biên bản / QĐ / nghị quyết vào phiếu ĐV
@@ -162,7 +186,9 @@ class ContinuationValidator:
             )
             return r1
 
-        r2 = self._rule2_layout(prev, curr, has_open_group, open_doc_type)
+        r2 = self._rule2_layout(
+            prev, curr, has_open_group, open_doc_type, open_page_count
+        )
         if r2.is_continuation:
             logger.debug(
                 f"Page {curr.page_num}: continuation via {r2.rule} — {r2.reason}"
@@ -295,6 +321,7 @@ class ContinuationValidator:
         curr: PageSignal,
         has_open_group: bool = False,
         open_doc_type: Optional[str] = None,
+        open_page_count: int = 0,
     ) -> ContinuationVerdict:
         """
         Heuristic layout:
@@ -305,6 +332,11 @@ class ContinuationValidator:
             return ContinuationVerdict(False, "rule2", "curr_has_keyword", 0.0)
 
         doc_key = (open_doc_type or "").upper()
+        max_soft = soft_max_pages_for(doc_key) if has_open_group else None
+        if max_soft is not None and open_page_count >= max_soft:
+            return ContinuationVerdict(
+                False, "rule2", f"open_at_soft_max({max_soft})", 0.0
+            )
 
         # B2 trước — cache OCR không có bbox; phiếu/kiểm điểm vẫn soft-cont
         if (
@@ -315,27 +347,48 @@ class ContinuationValidator:
                 "PHIEU_BO_SUNG_HO_SO_DANG_VIEN",
                 "BAN_TU_KIEM_DIEM_HANG_NAM",
                 "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI",
+                "BAN_TU_KIEM_DIEM_TAI_THOI_DIEM_CHUYEN",
+                "BAN_TU_KIEM_DIEM_DANG_VIEN_VI_PHAM",
             }
             and not curr.has_doc_keyword
             and not getattr(curr, "is_toc", False)
-            and curr.text_density >= 0.015
+            and curr.text_density >= 0.02
         ):
             from pipeline.doc_identity import (
+                looks_like_kiem_diem_header,
+                looks_like_phieu_bo_sung,
                 looks_like_quyet_dinh_or_nghi_quyet,
                 looks_like_standalone_minutes,
             )
 
-            if not looks_like_standalone_minutes(
+            # Header form mới / biên bản / QĐ → không soft midpage
+            if looks_like_standalone_minutes(
                 curr.header_text, curr.full_text or ""
-            ) and not looks_like_quyet_dinh_or_nghi_quyet(
+            ) or looks_like_quyet_dinh_or_nghi_quyet(
                 curr.header_text, curr.full_text or ""
             ):
                 return ContinuationVerdict(
-                    True,
-                    "rule2",
-                    f"open_form_soft_midpage type={doc_key}",
-                    0.72,
+                    False, "rule2", "new_form_or_minutes_header", 0.0
                 )
+            # Header loại KHÁC form đang mở
+            if doc_key != "PHIEU_BO_SUNG_HO_SO_DANG_VIEN" and looks_like_phieu_bo_sung(
+                curr.header_text, curr.full_text or ""
+            ):
+                return ContinuationVerdict(
+                    False, "rule2", "phieu_bo_sung_header_vs_open", 0.0
+                )
+            if not doc_key.startswith("BAN_TU_KIEM") and looks_like_kiem_diem_header(
+                curr.header_text, curr.full_text or ""
+            ):
+                return ContinuationVerdict(
+                    False, "rule2", "kiem_diem_header_vs_open", 0.0
+                )
+            return ContinuationVerdict(
+                True,
+                "rule2",
+                f"open_form_soft_midpage type={doc_key}",
+                0.72,
+            )
 
         prev_blocks = getattr(prev, "header_blocks", None) or []
         prev_all = getattr(prev, "all_blocks", None) or prev_blocks

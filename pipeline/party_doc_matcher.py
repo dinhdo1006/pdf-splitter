@@ -558,3 +558,50 @@ def get_matcher() -> PartyDocMatcher:
     if _default_matcher is None:
         _default_matcher = PartyDocMatcher()
     return _default_matcher
+
+
+def refine_unknown_group_types(
+    groups: list,
+    all_signals: dict,
+) -> int:
+    """
+    Post-classify nhóm CHUA_XAC_DINH bằng matcher trên vài trang đầu.
+    Returns số group được gán lại catalog.
+    """
+    matcher = get_matcher()
+    updated = 0
+    for g in groups:
+        key = (getattr(g, "doc_type", "") or "").upper()
+        if key and key in PARTY_DOC_CATALOG and key != "CHUA_XAC_DINH":
+            continue
+        pages = list(getattr(g, "page_numbers", []) or [])[:3]
+        if not pages:
+            continue
+        headers: list[str] = []
+        fulls: list[str] = []
+        size = getattr(g, "page_size_group", "OTHER") or "OTHER"
+        for pn in pages:
+            sig = all_signals.get(pn)
+            if sig is None:
+                continue
+            headers.append(getattr(sig, "header_text", "") or "")
+            fulls.append((getattr(sig, "full_text", "") or "")[:900])
+            size = getattr(sig, "page_size_group", size) or size
+        if not headers:
+            continue
+        result = matcher.match(
+            "\n".join(headers),
+            "\n".join(fulls),
+            page_size_group=size,
+        )
+        new_key = (result.doc_type_key or "").upper()
+        if new_key and new_key in PARTY_DOC_CATALOG:
+            g.doc_type = new_key
+            if not getattr(g, "raw_title", None) and result.matched_phrase:
+                g.raw_title = result.matched_phrase
+            updated += 1
+            logger.info(
+                f"[refine] group #{getattr(g, 'group_id', '?')} "
+                f"CHUA_XAC_DINH → {new_key} (score={result.score:.1f})"
+            )
+    return updated

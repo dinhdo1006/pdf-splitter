@@ -510,6 +510,20 @@ def test_identity_reject_tdv_and_garbage_name() -> None:
     assert bad.cccd is None, bad
     assert bad.ho_ten is None, bad
 
+    garbage = extract_member_identity_from_text(
+        "Ho va ten: Pham Hay Ack Bi Danh\nSo TDV: 2772699\n",
+        source="garbage",
+    )
+    assert garbage.ho_ten is None, garbage
+
+    bi_danh = extract_member_identity_from_text(
+        "Ho va ten: Pham Huu Luat Bi danh: ABC\nSo CCCD: 001234567890\n",
+        source="bidanh",
+    )
+    assert bi_danh.ho_ten is not None and "Luat" in bi_danh.ho_ten
+    assert "Bi" not in (bi_danh.ho_ten or "")
+    assert bi_danh.cccd == "001234567890"
+
     good = extract_member_identity_from_text(
         "Ho va ten khai sinh: Pham Huu Luat\nSo CCCD: 001234567890\n",
         source="good",
@@ -517,6 +531,112 @@ def test_identity_reject_tdv_and_garbage_name() -> None:
     assert good.ho_ten is not None and "Luat" in good.ho_ten
     assert good.cccd == "001234567890"
     print("  OK  identity_reject_tdv_and_garbage_name")
+
+
+def test_soft_max_ly_lich_and_toc_closes_kiem_diem() -> None:
+    from pipeline.continuation_validator import soft_max_pages_for
+
+    assert soft_max_pages_for("LY_LICH_DANG_VIEN") == 18
+    assert soft_max_pages_for("PHIEU_BO_SUNG_HO_SO_DANG_VIEN") == 6
+
+    det = BoundaryDetector()
+    det.process_page(
+        _sig(
+            1,
+            size="BOOKLET_SMALL",
+            matched="LY_LICH_DANG_VIEN",
+            header="LY LICH DANG VIEN",
+            full="trang 1",
+        )
+    )
+    for pn in range(2, 20):
+        d = det.process_page(
+            _sig(
+                pn,
+                size="BOOKLET_SMALL",
+                header="tiep",
+                full=f"trang {pn} noi dung form",
+            )
+        )
+        if pn <= 18:
+            assert d.page_class == PageClass.CONFIRMED_CONTINUATION, (
+                pn,
+                d.reasoning,
+            )
+        else:
+            # Chạm soft-max → orphan hoặc NEW, không nuốt tiếp
+            assert d.page_class != PageClass.CONFIRMED_CONTINUATION, (
+                pn,
+                d.reasoning,
+            )
+    groups, orphans = det.finalize()
+    ll = [g for g in groups if g.doc_type == "LY_LICH_DANG_VIEN"]
+    assert ll and len(ll[0].page_numbers) <= 18, ll[0].page_numbers
+
+    det2 = BoundaryDetector()
+    det2.process_page(
+        _sig(
+            1,
+            size="A4_PORTRAIT",
+            matched="BAN_TU_KIEM_DIEM_HANG_NAM",
+            header="BAN TU KIEM DIEM",
+            full="nam 2012",
+        )
+    )
+    det2.process_page(
+        _sig(2, size="A4_PORTRAIT", header="tiep", full="noi dung kiem diem")
+    )
+    d_toc = det2.process_page(
+        _sig(3, size="A4_PORTRAIT", toc=True, header="MUC LUC TAI LIEU")
+    )
+    assert d_toc.page_class == PageClass.ORPHAN_PAGE
+    d4 = det2.process_page(
+        _sig(4, size="A4_PORTRAIT", header="noi dung bat ky")
+    )
+    assert d4.page_class == PageClass.ORPHAN_PAGE
+    g2, o2 = det2.finalize()
+    assert any(g.page_numbers == [1, 2] for g in g2), g2
+    assert 3 in o2 and 4 in o2
+    print("  OK  soft_max_ly_lich_and_toc_closes_kiem_diem")
+
+
+def test_refine_unknown_group_types() -> None:
+    from pipeline.party_doc_matcher import refine_unknown_group_types
+
+    g = DocumentGroup(
+        group_id=10,
+        page_numbers=[59, 60],
+        doc_type="CHUA_XAC_DINH",
+        page_size_group="A4_MEDIUM",
+        raw_title="",
+    )
+    signals = {
+        59: _sig(
+            59,
+            size="A4_MEDIUM",
+            header="1 QUYEN LY LICH DANG VIEN\n1 BIEN BAN HOP CHI BO",
+            full="muc luc tai lieu",
+        ),
+        60: _sig(60, size="A4_MEDIUM", header="tiep", full="noi dung"),
+    }
+    # TOC-like listing may stay unknown; QĐ header should refine
+    g2 = DocumentGroup(
+        group_id=11,
+        page_numbers=[42],
+        doc_type="CHUA_XAC_DINH",
+        page_size_group="A4_PORTRAIT",
+        raw_title="",
+    )
+    signals[42] = _sig(
+        42,
+        size="A4_PORTRAIT",
+        header="THANH UY HA NOI\nSO 6294 - QD/TU",
+        full="quyet dinh dieu dong",
+    )
+    n = refine_unknown_group_types([g, g2], signals)
+    assert g2.doc_type == "CAC_QUYET_DINH_DIEU_DONG_BO_NHIEM", g2.doc_type
+    assert n >= 1
+    print("  OK  refine_unknown_group_types")
 
 
 def test_orphan_closes_phieu_dang_vien() -> None:
@@ -676,6 +796,8 @@ def main() -> int:
         test_prev_eod_boost,
         test_identity_extract_from_phieu_and_cli_override,
         test_identity_reject_tdv_and_garbage_name,
+        test_soft_max_ly_lich_and_toc_closes_kiem_diem,
+        test_refine_unknown_group_types,
         test_orphan_closes_phieu_dang_vien,
         test_qd_tu_alias_and_chuan_y,
         test_force_phieu_bo_sung_year_and_kiem_diem,

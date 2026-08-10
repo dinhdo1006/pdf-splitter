@@ -122,6 +122,20 @@ def looks_like_quyet_dinh_or_nghi_quyet(header: str, full_text: str = "") -> boo
     return any(h in blob for h in hints)
 
 
+def looks_like_ly_lich_header(header: str, full_text: str = "") -> bool:
+    blob = unidecode((header or "") + "\n" + (full_text or "")[:400]).lower()
+    return any(
+        x in blob
+        for x in (
+            "ly lich dang vien",
+            "ly lich cua nguoi xin vao dang",
+            "so ly lich",
+            "so yeu ly lich",
+            "ly lich dang",
+        )
+    )
+
+
 def looks_like_kiem_diem_header(header: str, full_text: str = "") -> bool:
     blob = unidecode((header or "") + "\n" + (full_text or "")[:350]).lower()
     return any(
@@ -154,6 +168,30 @@ def should_force_new_document(
     blob_year = extract_year_robust((curr_header or "") + "\n" + (curr_full or "")[:400])
     curr_ref = extract_decision_ref((curr_header or "") + "\n" + (curr_full or "")[:500])
 
+    from pipeline.continuation_validator import soft_max_pages_for
+
+    # Lý lịch: đổi loại / chạm soft-max + header LL mới / sang phiếu|kiểm điểm
+    if open_t in {"LY_LICH_DANG_VIEN", "LY_LICH_NGUOI_XIN_VAO_DANG"}:
+        if looks_like_phieu_bo_sung(curr_header, curr_full) or curr_t.startswith(
+            "PHIEU_"
+        ):
+            return True, "ly_lich_to_phieu"
+        if looks_like_kiem_diem_header(curr_header, curr_full) or curr_t.startswith(
+            "BAN_TU_KIEM"
+        ):
+            return True, "ly_lich_to_kiem_diem"
+        if looks_like_standalone_minutes(curr_header, curr_full):
+            return True, "ly_lich_to_minutes"
+        max_ll = soft_max_pages_for(open_t) or 18
+        if open_page_count >= max_ll and (
+            looks_like_ly_lich_header(curr_header, curr_full) or curr_t == open_t
+        ):
+            return True, "ly_lich_max_pages"
+        if open_page_count >= max_ll and looks_like_ly_lich_header(
+            curr_header, curr_full
+        ):
+            return True, "ly_lich_max_pages_header"
+
     # Phiếu ĐV đã có ≥1 trang + trang sau là phiếu bổ sung
     if open_t == "PHIEU_DANG_VIEN" and open_page_count >= 1:
         if curr_t == "PHIEU_BO_SUNG_HO_SO_DANG_VIEN" or looks_like_phieu_bo_sung(
@@ -164,8 +202,8 @@ def should_force_new_document(
             return True, "phieu_dv_to_minutes"
         if looks_like_quyet_dinh_or_nghi_quyet(curr_header, curr_full):
             return True, "phieu_dv_to_quyet_dinh"
-        # Phiếu ĐV thường 3–5 trang; quá dài + header catalog mới → tách
-        if open_page_count >= 6 and (
+        max_pd = soft_max_pages_for(open_t) or 6
+        if open_page_count >= max_pd and (
             looks_like_phieu_dang_vien(curr_header, curr_full) or curr_t == open_t
         ):
             return True, "phieu_dv_max_pages"
@@ -179,8 +217,8 @@ def should_force_new_document(
                 and open_year != blob_year
             ):
                 return True, f"phieu_bo_sung_new_year({blob_year})"
-            # Sau ≥5 trang mà lại thấy tiêu đề Mẫu 3 / Phiếu bổ sung → form mới
-            if open_page_count >= 5 and looks_like_phieu_bo_sung(
+            # Sau ≥4 trang mà lại thấy tiêu đề Mẫu 3 / Phiếu bổ sung → form mới
+            if open_page_count >= 4 and looks_like_phieu_bo_sung(
                 curr_header, curr_full
             ):
                 return True, "phieu_bo_sung_new_form_header"
@@ -196,12 +234,14 @@ def should_force_new_document(
                 and open_year != blob_year
             ):
                 return True, f"kiem_diem_new_year({blob_year})"
-            if open_page_count >= 6 and looks_like_kiem_diem_header(
+            if open_page_count >= 5 and looks_like_kiem_diem_header(
                 curr_header, curr_full
             ):
                 return True, "kiem_diem_new_form_header"
         if looks_like_phieu_bo_sung(curr_header, curr_full):
             return True, "kiem_diem_to_phieu_bo_sung"
+        if looks_like_standalone_minutes(curr_header, curr_full):
+            return True, "kiem_diem_to_minutes"
 
     # Quyết định: số QĐ khác hoặc đã có trang + match QĐ mới
     if is_quyet_dinh_type(open_t) and is_quyet_dinh_type(curr_t):

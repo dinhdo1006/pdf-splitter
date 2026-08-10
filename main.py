@@ -518,6 +518,16 @@ def main() -> int:
     except Exception as rex:
         logger.error(f"Pass-2 reattach failed (giữ orphans gốc): {rex}")
 
+    # Post-classify nhóm CHUA_XAC_DINH → catalog nếu match được
+    try:
+        from pipeline.party_doc_matcher import refine_unknown_group_types
+
+        n_refined = refine_unknown_group_types(groups, all_signals)
+        if n_refined:
+            logger.info(f"Refined {n_refined} CHUA_XAC_DINH groups → catalog")
+    except Exception as rex:
+        logger.error(f"Refine unknown types failed: {rex}")
+
     # Audit đủ trang trước export
     page_audit_report: dict = {}
     try:

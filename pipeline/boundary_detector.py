@@ -21,10 +21,16 @@ from rapidfuzz import fuzz
 from unidecode import unidecode
 
 import config
-from pipeline.continuation_validator import ContinuationValidator, MULTI_PAGE_FORM_TYPES
+from pipeline.continuation_validator import (
+    ContinuationValidator,
+    MULTI_PAGE_FORM_TYPES,
+    soft_max_pages_for,
+)
 from pipeline.doc_identity import (
     extract_decision_ref,
     is_quyet_dinh_type,
+    looks_like_kiem_diem_header,
+    looks_like_ly_lich_header,
     looks_like_phieu_bo_sung,
     looks_like_phieu_dang_vien,
     looks_like_quyet_dinh_or_nghi_quyet,
@@ -256,13 +262,7 @@ class BoundaryDetector:
         if self._current_group is None:
             return False
         open_t = (self._current_group.doc_type or "").upper()
-        # Chặn soft-nuốt quá dài (phiếu / kiểm điểm)
-        max_soft = {
-            "PHIEU_DANG_VIEN": 6,
-            "PHIEU_BO_SUNG_HO_SO_DANG_VIEN": 6,
-            "BAN_TU_KIEM_DIEM_HANG_NAM": 8,
-            "BAN_TU_KIEM_DIEM_DANG_VIEN_DU_BI": 8,
-        }.get(open_t)
+        max_soft = soft_max_pages_for(open_t)
         if max_soft is not None and len(self._current_group.page_numbers) >= max_soft:
             logger.info(
                 f"Page {signal.page_num}: soft-cont blocked — "
@@ -278,12 +278,45 @@ class BoundaryDetector:
         )
         return True
 
+    def _page_looks_like_new_form(self, signal: PageSignal) -> bool:
+        if signal.matched_doc_type:
+            return True
+        h = signal.header_text or ""
+        f = signal.full_text or ""
+        return (
+            looks_like_phieu_bo_sung(h, f)
+            or looks_like_phieu_dang_vien(h, f)
+            or looks_like_kiem_diem_header(h, f)
+            or looks_like_ly_lich_header(h, f)
+            or looks_like_quyet_dinh_or_nghi_quyet(h, f)
+        )
+
+    def _continue_or_new_or_orphan(
+        self,
+        signal: PageSignal,
+        score: float,
+        score_reason: str,
+        cont_reason: str,
+    ) -> tuple[PageClass, str]:
+        """Thử soft-continue; nếu soft-max đóng group thì mở NEW khi trang giống form mới."""
+        if self._append_continuation(signal, cont_reason):
+            return (
+                PageClass.CONFIRMED_CONTINUATION,
+                f"confirmed_cont[{cont_reason}] | {score_reason}",
+            )
+        if self._page_looks_like_new_form(signal):
+            self._open_new_group(
+                signal, score, f"after_soft_max|{cont_reason}|{score_reason}"
+            )
+            return PageClass.NEW_DOCUMENT, f"new[after_soft_max] | {score_reason}"
+        self._mark_orphan(signal, f"soft_max_or_no_open | {cont_reason}")
+        return PageClass.ORPHAN_PAGE, f"orphan[soft_max_or_no_open] | {score_reason}"
+
     def _mark_orphan(self, signal: PageSignal, reason: str) -> None:
         """
         Cách ly trang mồ côi.
-        Lý lịch nhiều trang: giữ group mở để trang sau còn continuation.
-        Quyết định: luôn đóng. Phiếu ĐV: chỉ đóng khi orphan là TOC/biên bản/appendix
-        (không đóng vì soft-cont fail giữa các trang phiếu).
+        Quyết định: luôn đóng. Form đa trang: đóng khi orphan là TOC/biên bản/appendix
+        (không đóng vì soft-cont fail giữa các trang form).
         """
         self._orphan_pages.append(signal.page_num)
         open_id = self._current_group.group_id if self._current_group else None
@@ -296,23 +329,28 @@ class BoundaryDetector:
         if is_quyet_dinh_type(open_t):
             self._close_current_group("orphan_closes_quyet_dinh")
             return
-        if open_t == "PHIEU_DANG_VIEN":
-            r = (reason or "").lower()
-            if any(
-                x in r
-                for x in (
-                    "toc",
-                    "minutes",
-                    "appendix",
-                    "bien_ban",
-                    "quyet_dinh",
-                    "nghi_quyet",
-                )
-            ):
-                self._close_current_group("orphan_closes_phieu_dang_vien")
-            return
         if open_t.startswith("NGHI_QUYET"):
             self._close_current_group("orphan_closes_decision_like")
+            return
+        r = (reason or "").lower()
+        boundary_orphan = any(
+            x in r
+            for x in (
+                "toc",
+                "minutes",
+                "appendix",
+                "bien_ban",
+                "quyet_dinh",
+                "nghi_quyet",
+            )
+        )
+        if not boundary_orphan:
+            return
+        if open_t == "PHIEU_DANG_VIEN":
+            self._close_current_group("orphan_closes_phieu_dang_vien")
+            return
+        if open_t in MULTI_PAGE_FORM_TYPES or open_t.startswith("BAN_TU_KIEM"):
+            self._close_current_group(f"orphan_closes_{open_t.lower()}")
 
     def _close_current_group(self, reason: str) -> None:
         """Đóng group đang mở (giữ orphan list / không tạo orphan)."""
@@ -429,21 +467,18 @@ class BoundaryDetector:
                     self._prev_was_blank = False
                     return decision
 
-        # Đang mở QĐ / phiếu ĐV + trang hiện tại giống biên bản → orphan
+        # Đang mở form đa trang / QĐ + trang hiện tại giống biên bản → orphan
         if (
             self._current_group is not None
             and (
                 is_quyet_dinh_type(open_doc)
-                or open_doc == "PHIEU_DANG_VIEN"
+                or open_doc in MULTI_PAGE_FORM_TYPES
+                or open_doc.startswith("BAN_TU_KIEM")
             )
             and looks_like_standalone_minutes(signal.header_text, signal.full_text or "")
             and not (signal.matched_doc_type or "").upper().startswith("QUYET_DINH")
         ):
-            close_why = (
-                "minutes_after_quyet_dinh"
-                if is_quyet_dinh_type(open_doc)
-                else "minutes_after_phieu_dang_vien"
-            )
+            close_why = f"minutes_after_{open_doc.lower() or 'open'}"
             self._close_current_group(close_why)
             self._mark_orphan(signal, close_why)
             decision = BoundaryDecision(
@@ -473,14 +508,17 @@ class BoundaryDetector:
             if not signal.matched_doc_type:
                 score_reason += "; +force_after_phieu_close"
 
-        # TOC: LUÔN orphan — không bao giờ gộp vào lý lịch / soft size
+        # TOC: LUÔN orphan — đóng mọi form đa trang / booklet đang mở
         if getattr(signal, "is_toc", False):
-            # Đóng booklet/landscape đang mở trước khi orphan TOC
-            if (
-                self._current_group is not None
-                and self._current_group.page_size_group in _STRONG_SIZE
-            ):
-                self._close_current_group("toc_closes_booklet_group")
+            if self._current_group is not None:
+                open_t = (self._current_group.doc_type or "").upper()
+                if (
+                    self._current_group.page_size_group in _STRONG_SIZE
+                    or open_t in MULTI_PAGE_FORM_TYPES
+                    or open_t.startswith("BAN_TU_KIEM")
+                    or is_quyet_dinh_type(open_t)
+                ):
+                    self._close_current_group("toc_closes_open_document")
             self._mark_orphan(signal, "toc_not_catalog_document")
             decision = BoundaryDecision(
                 page_num=signal.page_num,
@@ -522,6 +560,21 @@ class BoundaryDetector:
                         reasoning=(
                             f"confirmed_cont[form_section_open_form] | {score_reason}"
                         ),
+                    )
+                    self._prev_signal = signal
+                    self._prev_was_blank = False
+                    return decision
+                # Soft-max vừa đóng — thử NEW nếu header form
+                if self._page_looks_like_new_form(signal):
+                    self._open_new_group(
+                        signal, score, f"form_section_after_soft_max|{score_reason}"
+                    )
+                    decision = BoundaryDecision(
+                        page_num=signal.page_num,
+                        page_class=PageClass.NEW_DOCUMENT,
+                        score=score,
+                        confidence=confidence,
+                        reasoning=f"new[form_section_after_soft_max] | {score_reason}",
                     )
                     self._prev_signal = signal
                     self._prev_was_blank = False
@@ -624,24 +677,19 @@ class BoundaryDetector:
             page_class = PageClass.NEW_DOCUMENT
             reasoning = f"new | {score_reason}"
         elif "repeated_catalog_header_same_type" in score_reason:
-            if self._append_continuation(signal, "repeated_catalog_header_same_type"):
-                page_class = PageClass.CONFIRMED_CONTINUATION
-                reasoning = f"confirmed_cont[same_type_header] | {score_reason}"
-            else:
-                self._mark_orphan(signal, "repeated_header_but_no_open_group")
-                page_class = PageClass.ORPHAN_PAGE
-                reasoning = "orphan | no_open_group"
+            page_class, reasoning = self._continue_or_new_or_orphan(
+                signal, score, score_reason, "repeated_catalog_header_same_type"
+            )
         elif self._soft_size_continuation(signal):
-            if self._append_continuation(signal, "soft_same_size_group"):
-                page_class = PageClass.CONFIRMED_CONTINUATION
-                reasoning = f"confirmed_cont[soft_size] | {score_reason}"
-            else:
-                self._mark_orphan(signal, "soft_size_but_no_open_group")
-                page_class = PageClass.ORPHAN_PAGE
-                reasoning = "orphan | no_open_group"
+            page_class, reasoning = self._continue_or_new_or_orphan(
+                signal, score, score_reason, "soft_same_size_group"
+            )
         else:
             open_doc_type = (
                 self._current_group.doc_type if self._current_group else None
+            )
+            open_pages = (
+                len(self._current_group.page_numbers) if self._current_group else 0
             )
             verdict = self.validator.validate(
                 self._prev_signal,
@@ -649,18 +697,12 @@ class BoundaryDetector:
                 self.llm_referee,
                 has_open_group=self._current_group is not None,
                 open_doc_type=open_doc_type,
+                open_page_count=open_pages,
             )
             if verdict.is_continuation:
-                if self._append_continuation(signal, verdict.reason):
-                    page_class = PageClass.CONFIRMED_CONTINUATION
-                    reasoning = f"confirmed_cont[{verdict.rule}] | {verdict.reason}"
-                else:
-                    self._mark_orphan(
-                        signal,
-                        f"continuation_claimed_but_no_open_group | {verdict.reason}",
-                    )
-                    page_class = PageClass.ORPHAN_PAGE
-                    reasoning = "orphan | no_open_group"
+                page_class, reasoning = self._continue_or_new_or_orphan(
+                    signal, score, score_reason, verdict.reason
+                )
             else:
                 self._mark_orphan(signal, verdict.reason)
                 page_class = PageClass.ORPHAN_PAGE

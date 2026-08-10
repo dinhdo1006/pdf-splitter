@@ -98,7 +98,65 @@ _NOISE_NAME = frozenset(
         "uy",
         "chi",
         "bo",
+        "bi",
+        "danh",
+        "bi danh",
+        "ten",
+        "goi",
+        "khac",
     }
+)
+
+# Họ VN phổ biến — tên OCR sạch thường bắt đầu bằng họ này
+_COMMON_SURNAMES = frozenset(
+    {
+        "nguyen",
+        "tran",
+        "le",
+        "pham",
+        "hoang",
+        "huynh",
+        "phan",
+        "vu",
+        "vo",
+        "dang",
+        "bui",
+        "do",
+        "ho",
+        "ngo",
+        "duong",
+        "ly",
+        "doan",
+        "truong",
+        "dinh",
+        "lam",
+        "mai",
+        "dao",
+        "cao",
+        "chu",
+        "ha",
+        "luu",
+        "tong",
+        "ta",
+        "to",
+        "tang",
+        "thai",
+        "van",
+        "quach",
+        "thach",
+        "lau",
+        "kieu",
+        "ung",
+        "ong",
+        "la",
+        "an",
+        "au",
+    }
+)
+
+_SUSPICIOUS_NAME_TOKEN = re.compile(
+    r"(ack|ahang|lacain|qq+|xx+|zz+|ck$|bh$)",
+    re.IGNORECASE,
 )
 
 # Nguyên âm ASCII — tên người Việt OCR sạch phải có mật độ nguyên âm hợp lý
@@ -116,7 +174,7 @@ def _ocr_digit_fixup(raw: str) -> str:
 
 
 def _name_quality_ok(name: str) -> bool:
-    """Loại tên OCR rác kiểu 'Lacain Ahang T'."""
+    """Loại tên OCR rác kiểu 'Lacain Ahang T' / 'Pham Hay Ack Bi Danh'."""
     ascii_n = unidecode(name or "")
     parts = [p for p in ascii_n.split() if p]
     if len(parts) < 2 or len(parts) > 5:
@@ -126,6 +184,12 @@ def _name_quality_ok(name: str) -> bool:
         letters_only = re.sub(r"[^A-Za-z]", "", p)
         if len(letters_only) < 2:
             return False
+        if _SUSPICIOUS_NAME_TOKEN.search(letters_only):
+            return False
+    # Cấm nhãn form còn sót
+    low_parts = {p.lower() for p in parts}
+    if low_parts & {"bi", "danh", "alias"}:
+        return False
     letters = [c for c in ascii_n if c.isalpha()]
     if len(letters) < 6:
         return False
@@ -135,6 +199,9 @@ def _name_quality_ok(name: str) -> bool:
         return False
     # Quá nhiều phụ âm liên tiếp → OCR méo
     if re.search(r"[bcdfghjklmnpqrstvwxz]{5,}", ascii_n.lower()):
+        return False
+    # Ưu tiên họ phổ biến; nếu không có thì vẫn OK khi không suspicious
+    if parts[0].lower() not in _COMMON_SURNAMES and len(parts) >= 4:
         return False
     return True
 
@@ -146,9 +213,10 @@ def _clean_person_name(raw: str) -> Optional[str]:
     raw = re.split(r"[\n\r]+", raw, maxsplit=1)[0]
     name = re.sub(r"[\d:;|/\\]+", " ", raw)
     name = re.sub(r"\s+", " ", name).strip(" .-_,")
-    # Cắt phần sau nhãn phụ
+    # Cắt phần sau nhãn phụ (bí danh / tên gọi khác / CCCD…)
     name = re.split(
-        r"\b(nam|nu|sinh|ngay|que|quan|thuong|tru|dan|toc|so\s*cccd|so\s*cmnd|"
+        r"\b(bi\s*danh|ten\s*goi\s*khac|ten\s*khac|alias|"
+        r"nam|nu|sinh|ngay|que|quan|thuong|tru|dan|toc|so\s*cccd|so\s*cmnd|"
         r"cccd|cmnd|so\s*tdv|the\s*dang)\b",
         name,
         maxsplit=1,
@@ -198,27 +266,32 @@ def _extract_cccd_from_blob(blob: str) -> Optional[str]:
     ascii_blob = unidecode(blob)
     tdv_nums = _tdv_digit_set(ascii_blob)
 
+    def _ok_vs_tdv(digits: str) -> bool:
+        if digits in tdv_nums:
+            return False
+        return not any(
+            digits.startswith(t) or t.startswith(digits)
+            for t in tdv_nums
+            if len(t) >= 7
+        )
+
     m = _CCCD_LABELED.search(ascii_blob)
     if m:
         digits = re.sub(r"\D", "", _ocr_digit_fixup(m.group(1)))
-        if len(digits) in (9, 12):
-            # Nhãn CCCD nhưng số trùng TĐV gần đó → bỏ
-            if digits not in tdv_nums and not any(
-                digits.startswith(t) or t.startswith(digits) for t in tdv_nums if len(t) >= 7
-            ):
-                return digits
+        if len(digits) in (9, 12) and _ok_vs_tdv(digits):
+            return digits
 
-    # Bare: chỉ 12 số, và không nằm cạnh nhãn TĐV / không trùng số TĐV
+    # Bare 12 số: không block toàn blob chỉ vì có TĐV; chỉ bỏ số gần nhãn TĐV
     compact = re.sub(r"\s+", "", ascii_blob)
-    # Nếu blob có nhãn TĐV rõ → không dùng bare CCCD (tránh nhầm)
-    if _TDV_NEAR.search(ascii_blob):
-        return None
-
     for m in _CCCD_BARE_12.finditer(compact):
         d = m.group(1)
         if d.startswith(("19", "20")):
             continue
-        if any(d.startswith(t) or t.startswith(d[:9]) for t in tdv_nums if len(t) >= 7):
+        if not _ok_vs_tdv(d):
+            continue
+        start = max(0, m.start() - 24)
+        window = compact[start : m.end() + 8].lower()
+        if "tdv" in window or "thedang" in window or "sothe" in window:
             continue
         return d
     return None
@@ -266,13 +339,20 @@ def extract_member_identity_from_text(
 
 
 def merge_identities(*parts: MemberIdentity) -> MemberIdentity:
-    """Gộp nhiều kết quả; field đã có giữ nguyên (ưu tiên phần đứng trước)."""
+    """Gộp nhiều kết quả; ưu tiên tên đi kèm CCCD / chất lượng cao hơn."""
     out = MemberIdentity()
+    best_name: Optional[str] = None
+    best_name_score = -1.0
     for p in parts:
         if not p:
             continue
-        if out.ho_ten is None and p.ho_ten:
-            out.ho_ten = p.ho_ten
+        if p.ho_ten and _name_quality_ok(p.ho_ten):
+            score = float(p.confidence)
+            if p.cccd:
+                score += 2.0
+            if score > best_name_score:
+                best_name = p.ho_ten
+                best_name_score = score
         if out.cccd is None and p.cccd:
             out.cccd = p.cccd
         for attr in ("m1", "m2", "m3", "m4", "m5"):
@@ -280,7 +360,7 @@ def merge_identities(*parts: MemberIdentity) -> MemberIdentity:
                 setattr(out, attr, getattr(p, attr))
         out.sources.extend(p.sources)
         out.confidence = max(out.confidence, p.confidence)
-    # Recompute soft confidence
+    out.ho_ten = best_name
     score = 0.0
     if out.ho_ten:
         score += 0.45
