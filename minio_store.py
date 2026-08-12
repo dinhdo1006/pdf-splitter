@@ -42,6 +42,45 @@ def _join_key(*parts: str) -> str:
     return "/".join(cleaned)
 
 
+def _parse_s3_json(raw: str | dict[str, Any]) -> dict[str, Any]:
+    """Parse S3/MinIO JSON (endPoint, port, accessKey, secretKey, bucket, useSSL)."""
+    data = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    host = str(data.get("endPoint") or data.get("endpoint") or "").strip()
+    port = data.get("port")
+    if host and port:
+        endpoint = f"{host}:{int(port)}"
+    else:
+        endpoint = host or "10.10.6.134:9000"
+    access_key = str(data.get("accessKey") or data.get("access_key") or "").strip()
+    secret_key = str(data.get("secretKey") or data.get("secret_key") or "").strip()
+    bucket = str(data.get("bucket") or "hsdv-pdf-splitter").strip()
+    use_ssl = data.get("useSSL", data.get("use_ssl", False))
+    secure = str(use_ssl).strip().lower() in {"1", "true", "yes"}
+    return {
+        "endpoint": endpoint,
+        "access_key": access_key,
+        "secret_key": secret_key,
+        "bucket": bucket,
+        "secure": secure,
+    }
+
+
+def _load_s3_json_config() -> Optional[dict[str, Any]]:
+    config_path = os.getenv("MINIO_S3_CONFIG", "").strip()
+    if config_path:
+        path = Path(config_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"MINIO_S3_CONFIG không tồn tại: {path}")
+        return _parse_s3_json(path.read_text(encoding="utf-8"))
+    raw = os.getenv("MINIO_S3_JSON", "").strip()
+    if raw:
+        return _parse_s3_json(raw)
+    default_json = config.PROJECT_ROOT / "minio_s3_config.json"
+    if default_json.is_file():
+        return _parse_s3_json(default_json.read_text(encoding="utf-8"))
+    return None
+
+
 @dataclass
 class MinioSettings:
     endpoint: str
@@ -69,13 +108,28 @@ class MinioSettings:
             else:
                 load_dotenv(config.PROJECT_ROOT / ".env")
 
-        endpoint = os.getenv("MINIO_ENDPOINT", "10.10.6.134:9000").strip()
-        access_key = os.getenv("MINIO_ACCESS_KEY", "").strip()
-        secret_key = os.getenv("MINIO_SECRET_KEY", "").strip()
+        s3_cfg = _load_s3_json_config()
+        if s3_cfg:
+            endpoint = s3_cfg["endpoint"]
+            access_key = s3_cfg["access_key"]
+            secret_key = s3_cfg["secret_key"]
+            bucket_default = s3_cfg["bucket"]
+            secure_default = s3_cfg["secure"]
+        else:
+            endpoint = os.getenv("MINIO_ENDPOINT", "10.10.6.134:9000").strip()
+            access_key = os.getenv("MINIO_ACCESS_KEY", "").strip()
+            secret_key = os.getenv("MINIO_SECRET_KEY", "").strip()
+            bucket_default = os.getenv("MINIO_BUCKET", "hsdv-pdf-splitter").strip()
+            secure_default = os.getenv("MINIO_SECURE", "false").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+
         if not access_key or not secret_key:
             raise ValueError(
-                "Thiếu MINIO_ACCESS_KEY / MINIO_SECRET_KEY trong .env "
-                "(copy từ .env.example và điền key MinIO)."
+                "Thiếu MinIO credentials. Tạo minio_s3_config.json (copy từ example) "
+                "hoặc điền MINIO_ACCESS_KEY / MINIO_SECRET_KEY trong .env."
             )
 
         work = os.getenv("MINIO_WORK_DIR", "").strip()
@@ -85,8 +139,9 @@ class MinioSettings:
             endpoint=endpoint,
             access_key=access_key,
             secret_key=secret_key,
-            bucket=os.getenv("MINIO_BUCKET", "hsdv-pdf-splitter").strip(),
-            secure=os.getenv("MINIO_SECURE", "false").strip().lower() in {"1", "true", "yes"},
+            bucket=os.getenv("MINIO_BUCKET", bucket_default).strip(),
+            secure=os.getenv("MINIO_SECURE", str(secure_default)).strip().lower()
+            in {"1", "true", "yes"},
             auto_create_bucket=os.getenv("MINIO_AUTO_CREATE_BUCKET", "true").strip().lower()
             in {"1", "true", "yes"},
             prefix_inbox=_norm_prefix(os.getenv("MINIO_PREFIX_INBOX", "inbox")),

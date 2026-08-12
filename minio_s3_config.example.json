@@ -1,0 +1,10 @@
+{
+  "endPoint": "10.10.6.134",
+  "port": 9000,
+  "useSSL": false,
+  "accessKey": "YOUR_ACCESS_KEY",
+  "secretKey": "YOUR_SECRET_KEY",
+  "bucket": "hsdv-pdf-splitter",
+  "region": "",
+  "maxFileSize": 419430400
+}

@@ -96,16 +96,26 @@ Backend dùng cùng MinIO client tạo presigned GET cho file trong `output/{job
 
 ## Cài đặt & cấu hình
 
+Cách 1 — file JSON (khuyến nghị, cùng format S3 app):
+
 ```bash
-cp .env.example .env
-# Điền MINIO_ACCESS_KEY, MINIO_SECRET_KEY
-
-pip install minio python-dotenv
-
+cp minio_s3_config.example.json minio_s3_config.json
+nano minio_s3_config.json
+python scripts/write_env_from_s3.py
 python minio_run.py --setup
 ```
 
-Biến `.env` — xem `.env.example`.
+Dùng bucket riêng `hsdv-pdf-splitter` (tự tạo). Nếu dùng bucket `data-lake`, sửa `bucket` trong JSON và set prefix:
+
+```bash
+export MINIO_PREFIX_INBOX=hsdv-pdf-splitter/inbox
+export MINIO_PREFIX_OUTPUT=hsdv-pdf-splitter/output
+export MINIO_PREFIX_ARCHIVE=hsdv-pdf-splitter/archive/inbox
+export MINIO_PREFIX_STATUS=hsdv-pdf-splitter/jobs
+```
+
+Cách 2 — `.env` thủ công: copy `.env.example`, điền key.
+
 
 ## Lệnh thường dùng
 
