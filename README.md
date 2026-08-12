@@ -161,6 +161,12 @@ pdf_splitter/
 4. **Chạy chậm** — `--no-preprocess`, giảm DPI, `--pages 50` khi thử.
 5. **GPU SIGSEGV / Segmentation fault** khi `Creating model: PP-LCNet_x1_0_textline_ori` — GPU Blackwell (RTX 50) + Paddle cũ. Cài lại wheel `cu129` như mục Installation; tạm thời chạy `--cpu`.
 
+## Tích hợp backend (Cách A)
+
+Sau upload `inbox/{job_id}.pdf` → `python minio_trigger.py {job_id}`
+
+Hợp đồng đầy đủ: [`docs/DEV_INTEGRATION.md`](docs/DEV_INTEGRATION.md)
+
 ## MinIO (worker)
 
 ```bash

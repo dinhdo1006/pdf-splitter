@@ -71,18 +71,27 @@ hsdv-pdf-splitter/
 }
 ```
 
-## Cách dev tích hợp
+## Cách dev tích hợp (Cách A — chuẩn)
 
-### 1. Upload đầu vào
+1. Upload PDF → `inbox/{job_id}.pdf`
+2. Gọi `python minio_trigger.py {job_id}` (subprocess)
+3. Poll `jobs/{job_id}/status.json`
+4. List/download `output/{job_id}/`
+
+Chi tiết: **`docs/DEV_INTEGRATION.md`**
+
+### Upload đầu vào (legacy chi tiết)
 
 - Upload PDF lên `s3://hsdv-pdf-splitter/inbox/{job_id}.pdf`
 - `job_id` = tên file không đuôi (vd. `bdhn_001`)
 
 ### 2. Kích hoạt worker
 
-- **Cách A:** cron / scheduler gọi `python minio_run.py --poll`
-- **Cách B:** API backend gọi subprocess `python minio_run.py --job-id {job_id}`
-- **Cách C:** `python minio_run.py --key inbox/{job_id}.pdf`
+```bash
+python minio_trigger.py {job_id}
+```
+
+Hoặc `python minio_run.py --job-id {job_id} --dpi 150 --no-preprocess`
 
 ### 3. Đọc đầu ra
 
