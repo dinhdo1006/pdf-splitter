@@ -56,36 +56,94 @@ def _nvidia_free_mb() -> Optional[int]:
         return None
 
 
+def _version_tuple(raw: str) -> tuple[int, ...]:
+    nums = re.findall(r"\d+", str(raw or ""))
+    if not nums:
+        return (0,)
+    return tuple(int(x) for x in nums[:3])
+
+
+def _paddle_cuda_tuple(raw: str) -> tuple[int, int]:
+    nums = re.findall(r"\d+", str(raw or ""))
+    major = int(nums[0]) if nums else 0
+    minor = int(nums[1]) if len(nums) > 1 else 0
+    return major, minor
+
+
+def paddle_gpu_arch_supported() -> tuple[bool, str]:
+    """
+    True nếu wheel Paddle hiện tại có kernel cho GPU đang cắm.
+
+    RTX 50-series (Blackwell, sm_120) + paddlepaddle-gpu 2.6.x/CUDA 12.0
+    sẽ SIGSEGV khi CreateVariables — Python không bắt được, nên phải
+    từ chối GPU *trước* khi init PaddleOCR.
+    """
+    try:
+        import paddle
+    except Exception as exc:
+        return False, f"paddle_import_failed:{exc}"
+
+    try:
+        if not paddle.device.is_compiled_with_cuda():
+            return False, "paddle_not_compiled_with_cuda"
+        if paddle.device.cuda.device_count() <= 0:
+            return False, "cuda_device_count_0"
+        props = paddle.device.cuda.get_device_properties(0)
+        cc = int(getattr(props, "major", 0)) * 10 + int(getattr(props, "minor", 0))
+        name = str(getattr(props, "name", "") or "unknown")
+    except Exception as exc:
+        return False, f"gpu_props_failed:{exc}"
+
+    paddle_ver = str(getattr(paddle, "__version__", "0") or "0")
+    try:
+        cuda_ver = str(paddle.version.cuda() or "")
+    except Exception:
+        cuda_ver = ""
+
+    # Blackwell consumer: RTX 5050/5060/5070/5080/5090 (sm_120)
+    if cc >= 120:
+        if _version_tuple(paddle_ver) < (3, 2, 0):
+            return (
+                False,
+                f"blackwell_unsupported gpu={name} sm_{cc} paddle={paddle_ver} "
+                f"(cần paddlepaddle-gpu>=3.2 + CUDA 12.9/13.0 wheel)",
+            )
+        cuda_mm = _paddle_cuda_tuple(cuda_ver)
+        if cuda_mm < (12, 9) and cuda_mm[0] < 13:
+            return (
+                False,
+                f"blackwell_cuda_too_old gpu={name} sm_{cc} "
+                f"paddle_cuda={cuda_ver or '?'} (cần cu129 hoặc cu130)",
+            )
+        return True, f"blackwell_ok gpu={name} sm_{cc} paddle={paddle_ver} cuda={cuda_ver}"
+
+    return True, f"cuda_ok gpu={name} sm_{cc} paddle={paddle_ver} cuda={cuda_ver}"
+
+
 def detect_gpu_ready(
     min_free_mb: Optional[int] = None,
 ) -> tuple[bool, str]:
     """
-    True nếu Paddle CUDA sẵn sàng và (nếu check được) còn đủ VRAM trống.
+    True nếu Paddle CUDA sẵn sàng, GPU arch tương thích, và còn đủ VRAM trống.
     """
     min_free = int(
         min_free_mb
         if min_free_mb is not None
         else getattr(config, "OCR_GPU_MIN_FREE_MB", 1500)
     )
-    try:
-        import paddle
-
-        if not paddle.device.is_compiled_with_cuda():
-            return False, "paddle_not_compiled_with_cuda"
-        if paddle.device.cuda.device_count() <= 0:
-            return False, "cuda_device_count_0"
-    except Exception as exc:
-        return False, f"paddle_cuda_check_failed:{exc}"
+    arch_ok, arch_detail = paddle_gpu_arch_supported()
+    if not arch_ok:
+        return False, arch_detail
 
     free_mb = _nvidia_free_mb()
     if free_mb is not None and free_mb < min_free:
         return (
             False,
-            f"vram_low free={free_mb}MB < min={min_free}MB (có thể Ollama đang chiếm)",
+            f"vram_low free={free_mb}MB < min={min_free}MB (có thể Ollama đang chiếm); {arch_detail}",
         )
     if free_mb is not None:
-        return True, f"cuda_ok free_vram={free_mb}MB"
-    return True, "cuda_ok"
+        return True, f"{arch_detail} free_vram={free_mb}MB"
+    return True, arch_detail
 
 
 def resolve_ocr_use_gpu(
@@ -101,8 +159,11 @@ def resolve_ocr_use_gpu(
     ready, detail = detect_gpu_ready()
     if ready:
         return True, f"prefer_{pref}:{detail}"
+    # SIGSEGV (GPU arch không hỗ trợ) không bắt được bằng try/except.
+    # Không bao giờ ép GPU khi arch/CUDA wheel không tương thích.
     if pref == "gpu":
-        # Vẫn thử GPU — caller có thể fallback nếu init fail
+        if "blackwell_unsupported" in detail or "blackwell_cuda_too_old" in detail:
+            return False, f"forced_gpu_blocked:{detail}"
         return True, f"forced_gpu_despite:{detail}"
     return False, f"auto_cpu:{detail}"
 
@@ -167,10 +228,16 @@ class OCREngine:
         os.environ["FLAGS_use_mkldnn_bfloat16"] = "0"
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
+        os.environ.setdefault("FLAGS_allocator_strategy", "auto_growth")
+        os.environ.setdefault("FLAGS_conv_workspace_size_limit", "256")
+
         if use_gpu:
             # Đừng để env cũ ép trống GPU
             if os.environ.get("CUDA_VISIBLE_DEVICES", None) == "":
                 os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+            arch_ok, arch_detail = paddle_gpu_arch_supported()
+            if not arch_ok:
+                raise RuntimeError(f"GPU arch incompatible: {arch_detail}")
         else:
             os.environ["CUDA_VISIBLE_DEVICES"] = ""
 

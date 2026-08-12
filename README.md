@@ -21,8 +21,17 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
-> **GPU:** mặc định `OCR_USE_GPU = "auto"` — có CUDA + đủ VRAM thì GPU, không thì CPU.
+> **GPU:** mặc định `OCR_USE_GPU = "auto"` — có CUDA + đủ VRAM + wheel Paddle đúng kiến trúc GPU thì dùng GPU; không thì CPU.
 > Ép tay: `python main.py ... --gpu` hoặc `--cpu`.
+>
+> **RTX 50-series (5060 Ti / 5070 / 5080 / 5090, sm_120):** bắt buộc wheel CUDA 12.9+:
+> ```bash
+> pip uninstall -y paddlepaddle paddlepaddle-gpu
+> pip install paddlepaddle-gpu==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu129/
+> # Nếu venv còn PyTorch (TrOCR): Paddle ghi đè NCCL → restore:
+> pip install --force-reinstall --no-deps nvidia-nccl-cu13==2.29.7
+> ```
+> `paddlepaddle-gpu 2.6.x` (CUDA 12.0) sẽ **SIGSEGV** khi load `PP-LCNet_x1_0_textline_ori` — không phải lỗi `FLAGS_allocator_strategy`.
 
 ## First run
 
@@ -150,3 +159,21 @@ pdf_splitter/
 2. **Orphan nhiều** — Pass-2 đã gắn sandwich / multi-page / same size; xem `reattach_decisions` trong manifest.
 3. **Tách sai ranh giới** — chỉnh `HIGH_BOUNDARY_THRESHOLD`; xem `logs/low_confidence_pages.json`.
 4. **Chạy chậm** — `--no-preprocess`, giảm DPI, `--pages 50` khi thử.
+5. **GPU SIGSEGV / Segmentation fault** khi `Creating model: PP-LCNet_x1_0_textline_ori` — GPU Blackwell (RTX 50) + Paddle cũ. Cài lại wheel `cu129` như mục Installation; tạm thời chạy `--cpu`.
+
+## MinIO (worker)
+
+```bash
+cp .env.example .env   # điền key
+pip install minio python-dotenv
+python minio_run.py --setup
+python minio_run.py --job-id {id} --dpi 150 --no-preprocess --cpu
+```
+
+Hợp đồng inbox/output/status: `docs/MINIO_FLOW.md`.
+
+## Cursor / agent (chat mới)
+
+Ngữ cảnh dự án: [`AGENTS.md`](AGENTS.md).  
+Prompt dán chat mới: [`docs/CURSOR_HANDOFF.md`](docs/CURSOR_HANDOFF.md).  
+Hướng dẫn ngắn: [`docs/README_CURSOR.md`](docs/README_CURSOR.md).

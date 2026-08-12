@@ -24,11 +24,15 @@ logs/
 pipeline.zip
 _pdf_analysis.txt
 *.pdf
+work_minio/
+*.log
 
 # IDE / OS
 .idea/
 .vscode/
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 .DS_Store
 Thumbs.db
 *.swp
@@ -36,3 +40,4 @@ Thumbs.db
 # Env secrets
 .env
 .env.*
+!.env.example

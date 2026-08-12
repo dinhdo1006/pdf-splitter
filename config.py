@@ -19,8 +19,8 @@ CLAHE_TILE_SIZE = (8, 8)
 
 # ── OCR ────────────────────────────────────────────────────────────
 OCR_LANG = "vi"
-# "auto" = ưu tiên GPU nếu CUDA còn trống; không được thì CPU.
-# True / "gpu" = ép GPU (vẫn fallback CPU nếu init fail).
+# "auto" = ưu tiên GPU nếu CUDA còn trống + wheel Paddle đúng kiến trúc GPU; không thì CPU.
+# True / "gpu" = ép GPU (init fail → fallback CPU; arch Blackwell không hỗ trợ thì không ép).
 # False / "cpu" = ép CPU.
 OCR_USE_GPU = "auto"
 OCR_GPU_MIN_FREE_MB = 1500  # Dưới ngưỡng này (Ollama đầy VRAM) → chọn CPU

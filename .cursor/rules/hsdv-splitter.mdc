@@ -1,0 +1,29 @@
+---
+description: HSĐV PDF splitter — ngữ cảnh dự án, cấm đụng logic, việc tiếp theo MinIO
+alwaysApply: true
+---
+
+# pdf_splitter (hồ sơ đảng viên)
+
+Trước khi hỏi lại bài toán hoặc đề xuất rewrite lớn: đọc `AGENTS.md` và (nếu cần) `docs/CURSOR_HANDOFF.md`.
+
+## Scope
+
+- CLI bóc PDF scan HSĐV theo 1361 (104 loại, Phụ lục 2 naming).
+- Logic tách/đặt tên trong `pipeline/` + `main.py` — **đã ổn**; không rewrite trừ khi user mô tả lỗi cụ thể.
+- Repo này **không** làm UI hay REST cho frontend (đội dev khác).
+
+## Cấm
+
+- Hardcode theo hồ sơ BDHN / tên “Phạm Hữu Luật”
+- Thêm pass xử lý chồng trong `main.py` không có test
+- Commit `.env` / secret MinIO
+- Tự dựng FastAPI/HTML “cho đủ hệ thống” khi user chỉ hỏi MinIO hoặc việc khác
+
+## Việc tiếp theo (chỉ khi user bảo)
+
+MinIO qua `.env` → tải PDF → gọi pipeline hiện tại → `output/` (+ optional upload). Không API, không UI.
+
+## Trả lời
+
+Tiếng Việt. Tập trung đúng task. Không hỏi lại toàn bộ hệ thống nếu đã có `AGENTS.md`.
