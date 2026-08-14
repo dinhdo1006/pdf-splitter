@@ -24,8 +24,8 @@ Prefix trong bucket:
 | Path | Ai ghi | Ý nghĩa |
 |------|--------|---------|
 | `inbox/{job_id}.pdf` | **Dev upload** | PDF gốc chờ bóc |
-| `output/{job_id}/` | Worker | File đã tách + `manifest.json` |
-| `jobs/{job_id}/status.json` | Worker | Trạng thái (cũng đọc qua HTTP API) |
+| `output/{job_id}/` | Worker | File PDF đã tách (không đẩy JSON) |
+| `jobs/{job_id}/status.json` | Worker | Trạng thái poll (file JSON duy nhất cho API) |
 | `archive/inbox/{job_id}.pdf` | Worker | PDF gốc sau khi bóc xong |
 
 `job_id` = tên file **không** đuôi `.pdf`. Khoảng trắng được chấp nhận: `Ho so Nguyen Van A.pdf` → worker chuẩn hóa thành `Ho_so_Nguyen_Van_A` (poll / output dùng tên này).

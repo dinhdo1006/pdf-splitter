@@ -317,6 +317,8 @@ class MinioStore:
                 continue
             if any(part in skip_parts for part in path.parts):
                 continue
+            if path.suffix.lower() == ".json":
+                continue
             rel = path.relative_to(local_dir).as_posix()
             key = _join_key(dest_prefix, rel)
             self.upload_file(path, key)

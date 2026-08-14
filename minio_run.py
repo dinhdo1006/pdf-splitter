@@ -216,10 +216,6 @@ def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job
         if proc.returncode != 0:
             raise RuntimeError(f"main.py exit code {proc.returncode}")
 
-        manifest_key = None
-        if (local_output / "manifest.json").is_file():
-            manifest_key = _join_key(output_prefix, "manifest.json")
-
         uploaded = store.upload_directory(local_output, output_prefix)
         stats = load_manifest_stats(local_output)
 
@@ -234,7 +230,7 @@ def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job
                 status="completed",
                 input_key=input_key,
                 output_prefix=output_prefix,
-                manifest_key=manifest_key,
+                manifest_key=None,
                 stats=stats,
                 pipeline_args=pipeline_flags,
                 started_at=started_at,
