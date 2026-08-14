@@ -42,7 +42,7 @@ Tên: `{STT}.{Ten khong dau}[.N].pdf` — STT 1–99 pad 2, 100–104 pad 3; `.N
 
 ## Hiện trạng (đến handoff này)
 
-- **CLI + MinIO worker.** Chưa FastAPI, chưa GUI. Luồng MinIO: `minio_run.py` + `docs/MINIO_FLOW.md`.
+- **CLI + MinIO worker + HTTP API mỏng** (`api.py`, cổng 8090). Không GUI. Luồng: upload MinIO → `POST /api/jobs` → poll `GET /api/jobs/{id}`.
 - Minh chứng full 195 trang: log `docs/run_full_demo.log` — ~57 file catalog, orphan ~1.5%, DPI 150 + no-preprocess. Zip output demo lưu ngoài repo (xem `docs/samples/README.md`).
 - Tài liệu tốc độ: `docs/01-toc-do-va-tai-nguyen-may-chu.md` (+ bản `.doc` nếu có). OCR chiếm **>90%** thời gian. CPU vài giờ / 195 trang; GPU 8GB khoảng 5–15 phút.
 - **Giao diện + REST API: đội dev khác.** Không prototype HTML / không `POST /api/jobs` trừ khi user bảo.

@@ -17,6 +17,8 @@ tqdm>=4.66.0
 # MinIO luồng inbox → pipeline → output
 minio>=7.2.0
 python-dotenv>=1.0.0
+fastapi>=0.115.0
+uvicorn>=0.32.0
 
 # Handwriting OCR (optional — comment out nếu không cần)
 transformers>=4.40.0

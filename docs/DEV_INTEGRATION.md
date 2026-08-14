@@ -13,20 +13,62 @@ Luồng chuẩn: **upload MinIO → gọi worker → poll status → lấy outpu
 
 Ví dụ: `s3://hsdv-pdf-splitter/inbox/hs_20260812_001.pdf`
 
-## 2. Kích hoạt bóc tách (worker)
+## 2. Kích hoạt bóc tách — HTTP API (web gọi cái này)
 
-Sau upload thành công, gọi **một** trong các cách:
+Web **không** gọi file Python trên disk. Gọi HTTP trên máy chạy worker.
+
+Mặc định: `http://<IP-server-GPU>:8090`
+
+| Method | URL | Việc |
+|--------|-----|------|
+| `GET` | `/health` | API sống |
+| `POST` | `/api/jobs` | Bắt đầu bóc (PDF đã nằm `inbox/{job_id}.pdf`) |
+| `GET` | `/api/jobs/{job_id}` | Poll trạng thái |
+
+**POST** — body JSON:
+
+```json
+{ "job_id": "bdhn_full" }
+```
+
+Tuỳ chọn: `"pages": 5`, `"dpi": 150`, `"gpu": true`, `"debug": true`
+
+Trả **202**:
+
+```json
+{
+  "job_id": "bdhn_full",
+  "status": "accepted",
+  "poll_url": "/api/jobs/bdhn_full",
+  "inbox_key": "inbox/bdhn_full.pdf",
+  "output_prefix": "output/bdhn_full/"
+}
+```
+
+**GET** trả nội dung `status.json` (`running` / `completed` / `failed`).
+
+Ví dụ curl:
+
+```bash
+curl -X POST http://IP_SERVER:8090/api/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"job_id":"bdhn_full"}'
+
+curl http://IP_SERVER:8090/api/jobs/bdhn_full
+```
+
+Frontend/backend **không** exec:
+
+`.../.venv/bin/python .../minio_trigger.py`
+
+CLI chỉ dùng khi test SSH trên server.
+
+### CLI (test tay, không dùng cho web)
 
 ```bash
 cd /path/to/pdf_splitter
 source .venv/bin/activate
 python minio_trigger.py hs_20260812_001
-```
-
-Hoặc subprocess từ backend:
-
-```bash
-python minio_trigger.py {job_id}
 ```
 
 Mặc định: `--dpi 150 --no-preprocess`, OCR GPU **auto** (`config.OCR_USE_GPU`).
@@ -94,18 +136,14 @@ List/download mọi object dưới `output/{job_id}/`:
 
 Backend có thể tạo presigned GET URL (MinIO SDK) cho từng file.
 
-## 5. Luồng API gợi ý (backend dev)
+## 5. Luồng web / backend dev
 
 ```
-POST /api/hoso/split
-  → tạo job_id
-  → upload PDF → inbox/{job_id}.pdf
-  → subprocess: python minio_trigger.py {job_id}
-  → trả job_id cho frontend
-
-GET /api/hoso/split/{job_id}
-  → đọc jobs/{job_id}/status.json
-  → nếu completed: list output/{job_id}/
+User upload trên web
+  → backend upload PDF → MinIO inbox/{job_id}.pdf   (10.10.4.21:9000)
+  → backend POST http://<IP-GPU>:8090/api/jobs  { "job_id": "..." }
+  → frontend poll GET http://<IP-GPU>:8090/api/jobs/{job_id}
+  → completed → list/download MinIO output/{job_id}/
 ```
 
 ## 6. Cấu hình MinIO (server)
@@ -114,7 +152,15 @@ File `minio_s3_config.json` (không commit) + `python scripts/write_env_from_s3.
 
 Chi tiết bucket/prefix: `MINIO_FLOW.md`.
 
-## 7. Không làm trong repo này
+## 7. Chạy API trên server GPU
 
-- REST API / UI người dùng (đội dev khác)
-- Tự poll inbox 24/7 (Cách B) — không dùng trong Cách A
+```bash
+cd ~/Downloads/Hệ\ thống\ bóc\ tách\ pdf/pdf_splitter
+source .venv/bin/activate
+pip install fastapi uvicorn
+python api.py
+```
+
+Lắng nghe `0.0.0.0:8090`. Mở firewall port **8090** nếu web gọi từ máy khác.
+
+UI người dùng (form upload) vẫn do đội dev — API này chỉ **start job + poll status**.
