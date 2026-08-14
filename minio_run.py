@@ -29,7 +29,7 @@ from typing import Any, Optional
 from loguru import logger
 
 import config
-from minio_store import MinioSettings, MinioStore, _join_key
+from minio_store import MinioSettings, MinioStore
 
 
 def parse_args() -> argparse.Namespace:
