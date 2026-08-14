@@ -28,8 +28,10 @@ Prefix trong bucket:
 | `jobs/{job_id}/status.json` | Worker | Trạng thái (cũng đọc qua HTTP API) |
 | `archive/inbox/{job_id}.pdf` | Worker | PDF gốc sau khi bóc xong |
 
-`job_id` = chuỗi do **dev tạo** (UUID / mã hồ sơ). Phải trùng tên file, **không** có `.pdf`.  
-Ví dụ upload `inbox/hs_001.pdf` → `job_id` = `hs_001`.
+`job_id` = tên file **không** đuôi `.pdf`. Khoảng trắng được chấp nhận: `Ho so Nguyen Van A.pdf` → worker chuẩn hóa thành `Ho_so_Nguyen_Van_A` (poll / output dùng tên này).
+
+**1 file PDF** = 1 hồ sơ 1 người.  
+**Folder nhiều PDF** = mỗi file 1 hồ sơ, upload `inbox/<folder>/*.pdf` rồi `POST /api/jobs/batch`.
 
 ---
 
@@ -47,18 +49,33 @@ Xác nhận IP thật: trên máy worker chạy `python api.py`, hỏi admin IP 
 
 ### API
 
-**Bắt đầu bóc** — PDF **đã** nằm `inbox/{job_id}.pdf`:
+**Bắt đầu bóc 1 file** — PDF đã nằm inbox:
 
 ```http
 POST /api/jobs
 Content-Type: application/json
 
-{ "job_id": "hs_001" }
+{ "job_id": "Ho so Nguyen Van A" }
 ```
 
-HTTP **202**. OCR chạy nền, không đợi xong trong request này.
+Hoặc key đầy đủ (tên có khoảng trắng):
 
-Tuỳ chọn: `"pages": 5`, `"dpi": 150`, `"gpu": true`
+```json
+{ "object_key": "inbox/Ho so Nguyen Van A.pdf" }
+```
+
+Response có `job_id` đã bỏ space — **poll bằng `job_id` trong response**, không poll tên gốc có space.
+
+**Folder nhiều PDF** (vd. `inbox/dot_thang8/*.pdf`):
+
+```http
+POST /api/jobs/batch
+Content-Type: application/json
+
+{ "prefix": "dot_thang8" }
+```
+
+`prefix` rỗng = bóc hết `inbox/`. Mỗi PDF một `job_id` trong mảng `jobs`.
 
 **Hỏi trạng thái:**
 

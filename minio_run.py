@@ -47,6 +47,11 @@ def parse_args() -> argparse.Namespace:
         help="Xử lý tất cả PDF trong prefix inbox/",
     )
     parser.add_argument(
+        "--inbox-prefix",
+        default="",
+        help="Khi --poll: chỉ PDF trong inbox/<prefix>/ (folder nhiều hồ sơ)",
+    )
+    parser.add_argument(
         "--key",
         default=None,
         help="Object key MinIO (vd. inbox/hoso.pdf)",
@@ -143,12 +148,10 @@ def resolve_input_key(store: MinioStore, args: argparse.Namespace) -> tuple[str,
         return job_id, key
 
     if args.job_id:
-        job_id = args.job_id.strip()
-        key = store.inbox_key_for_job(job_id)
-        if not store.object_exists(key):
-            raise FileNotFoundError(
-                f"Không thấy inbox object: s3://{store.settings.bucket}/{key}"
-            )
+        try:
+            job_id, key = store.resolve_inbox_pdf(args.job_id)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(str(exc)) from exc
         return job_id, key
 
     raise ValueError("Cần --key hoặc --job-id (hoặc --poll)")
@@ -176,7 +179,9 @@ def load_manifest_stats(output_dir: Path) -> dict[str, Any]:
 
 
 def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job_id: str) -> int:
-    from minio_store import _utc_now_iso
+    from minio_store import _utc_now_iso, sanitize_job_id
+
+    job_id = sanitize_job_id(job_id) or job_id
 
     output_prefix = store.output_prefix_for_job(job_id)
     started_at = _utc_now_iso()
@@ -287,7 +292,7 @@ def main() -> int:
         return 0
 
     if args.poll:
-        keys = store.list_inbox_pdfs()
+        keys = store.list_inbox_pdfs(args.inbox_prefix or "")
         if not keys:
             logger.info("Inbox trống — không có PDF để xử lý.")
             return 0

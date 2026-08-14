@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,28 @@ def _norm_prefix(prefix: str) -> str:
 def _join_key(*parts: str) -> str:
     cleaned = [_norm_prefix(p) for p in parts if p and _norm_prefix(p)]
     return "/".join(cleaned)
+
+
+def sanitize_job_id(raw: str) -> str:
+    """
+    Chuẩn hóa tên file / job_id: khoảng trắng → _, bỏ ký tự lạ.
+    'Ho so Dang vien.pdf' → 'Ho_so_Dang_vien'
+    """
+    s = (raw or "").strip().replace("\\", "/")
+    s = s.split("/")[-1]
+    if s.lower().endswith(".pdf"):
+        s = s[:-4]
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"[^\w.\-]", "_", s, flags=re.UNICODE)
+    s = re.sub(r"_+", "_", s).strip("._-")
+    return s[:128]
+
+
+def _stem_from_key(object_key: str) -> str:
+    name = Path(object_key.replace("\\", "/")).name
+    if name.lower().endswith(".pdf"):
+        return name[:-4]
+    return Path(name).stem
 
 
 def _parse_s3_json(raw: str | dict[str, Any]) -> dict[str, Any]:
@@ -180,16 +203,18 @@ class MinioStore:
         return _join_key(self.settings.prefix_inbox, f"{job_id}.pdf")
 
     def output_prefix_for_job(self, job_id: str) -> str:
-        return _join_key(self.settings.prefix_output, job_id)
+        return _join_key(self.settings.prefix_output, sanitize_job_id(job_id) or job_id)
 
     def status_key_for_job(self, job_id: str) -> str:
-        return _join_key(self.settings.prefix_status, job_id, "status.json")
+        return _join_key(self.settings.prefix_status, sanitize_job_id(job_id) or job_id, "status.json")
 
     def archive_key_for_job(self, job_id: str) -> str:
-        return _join_key(self.settings.prefix_archive, f"{job_id}.pdf")
+        return _join_key(self.settings.prefix_archive, f"{sanitize_job_id(job_id) or job_id}.pdf")
 
-    def list_inbox_pdfs(self) -> list[str]:
-        prefix = _join_key(self.settings.prefix_inbox) + "/"
+    def list_inbox_pdfs(self, subprefix: str = "") -> list[str]:
+        prefix = _join_key(self.settings.prefix_inbox, subprefix)
+        if prefix:
+            prefix = prefix + "/"
         keys: list[str] = []
         for obj in self.client.list_objects(
             self.settings.bucket,
@@ -199,12 +224,60 @@ class MinioStore:
             name = obj.object_name
             if not name or not name.lower().endswith(".pdf"):
                 continue
-            # Bỏ qua file đã archive (nếu lỡ cùng prefix)
             if "/archive/" in name.lower():
                 continue
             keys.append(name)
         keys.sort()
         return keys
+
+    def resolve_inbox_pdf(self, hint: str) -> tuple[str, str]:
+        """
+        Tìm PDF inbox từ job_id hoặc tên file (có khoảng trắng / dấu).
+        Returns (job_id_sanitized, object_key).
+        """
+        hint = (hint or "").strip().replace("\\", "/")
+        if not hint:
+            raise FileNotFoundError("job_id / tên file trống")
+
+        # Key đầy đủ
+        if hint.lower().endswith(".pdf"):
+            key = hint if hint.startswith(self.settings.prefix_inbox) else _join_key(
+                self.settings.prefix_inbox, hint
+            )
+            if self.object_exists(key):
+                return sanitize_job_id(hint) or sanitize_job_id(key), key
+
+        sanitized = sanitize_job_id(hint)
+        if not sanitized:
+            raise FileNotFoundError(f"Không chuẩn hóa được job_id từ: {hint!r}")
+
+        candidates = [
+            _join_key(self.settings.prefix_inbox, f"{hint}.pdf")
+            if not hint.lower().endswith(".pdf")
+            else _join_key(self.settings.prefix_inbox, hint),
+            self.inbox_key_for_job(sanitized),
+            _join_key(self.settings.prefix_inbox, f"{hint.strip()}.pdf"),
+        ]
+        seen: set[str] = set()
+        for key in candidates:
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            if self.object_exists(key):
+                return sanitized, key
+
+        want = sanitized.lower()
+        for key in self.list_inbox_pdfs():
+            if sanitize_job_id(key).lower() == want:
+                return sanitized, key
+
+        raise FileNotFoundError(
+            f"Không thấy PDF inbox khớp {hint!r} "
+            f"(đã thử tên gốc và tên bỏ khoảng trắng: {sanitized}.pdf)"
+        )
+
+    def derive_job_id(self, object_key: str) -> str:
+        return sanitize_job_id(_stem_from_key(object_key)) or sanitize_job_id(object_key)
 
     def object_exists(self, object_key: str) -> bool:
         try:
@@ -267,18 +340,22 @@ class MinioStore:
         return key
 
     def read_status(self, job_id: str) -> Optional[dict[str, Any]]:
-        key = self.status_key_for_job(job_id)
-        try:
-            resp = self.client.get_object(self.settings.bucket, key)
-            data = resp.read()
-            resp.close()
-            resp.release_conn()
-            return json.loads(data.decode("utf-8"))
-        except S3Error:
-            return None
+        for candidate in (job_id, sanitize_job_id(job_id)):
+            if not candidate:
+                continue
+            key = self.status_key_for_job(candidate)
+            try:
+                resp = self.client.get_object(self.settings.bucket, key)
+                data = resp.read()
+                resp.close()
+                resp.release_conn()
+                return json.loads(data.decode("utf-8"))
+            except S3Error:
+                continue
+        return None
 
     def archive_inbox_object(self, source_key: str, job_id: str) -> Optional[str]:
-        dest_key = self.archive_key_for_job(job_id)
+        dest_key = self.archive_key_for_job(sanitize_job_id(job_id) or job_id)
         try:
             self.client.copy_object(
                 self.settings.bucket,
@@ -293,13 +370,7 @@ class MinioStore:
             return None
 
     def job_work_dir(self, job_id: str) -> Path:
-        return self.settings.work_dir / job_id
-
-    def derive_job_id(self, object_key: str) -> str:
-        name = Path(object_key).name
-        if name.lower().endswith(".pdf"):
-            return Path(name).stem
-        return Path(object_key).stem
+        return self.settings.work_dir / (sanitize_job_id(job_id) or job_id)
 
     def build_status(
         self,
