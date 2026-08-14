@@ -144,6 +144,6 @@ python minio_run.py --job-id test --keep-work --pages 5
 
 ## Ghi chú
 
-- Port API MinIO: **9000** (UI console thường **9001**).
+- API MinIO: **`10.10.4.21:9000`** (UI console **`10.10.4.21:9001`**).
 - Worker **không** là REST API — đội dev bọc `minio_run.py` hoặc import `minio_store` nếu cần.
 - Pipeline logic vẫn trong `main.py` — không đụng boundary/catalog.

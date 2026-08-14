@@ -1,5 +1,5 @@
 {
-  "endPoint": "10.10.6.134",
+  "endPoint": "10.10.4.21",
   "port": 9000,
   "useSSL": false,
   "accessKey": "YOUR_ACCESS_KEY",

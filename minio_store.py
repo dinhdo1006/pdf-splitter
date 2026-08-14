@@ -50,7 +50,7 @@ def _parse_s3_json(raw: str | dict[str, Any]) -> dict[str, Any]:
     if host and port:
         endpoint = f"{host}:{int(port)}"
     else:
-        endpoint = host or "10.10.6.134:9000"
+        endpoint = host or "10.10.4.21:9000"
     access_key = str(data.get("accessKey") or data.get("access_key") or "").strip()
     secret_key = str(data.get("secretKey") or data.get("secret_key") or "").strip()
     bucket = str(data.get("bucket") or "hsdv-pdf-splitter").strip()
@@ -116,7 +116,7 @@ class MinioSettings:
             bucket_default = s3_cfg["bucket"]
             secure_default = s3_cfg["secure"]
         else:
-            endpoint = os.getenv("MINIO_ENDPOINT", "10.10.6.134:9000").strip()
+            endpoint = os.getenv("MINIO_ENDPOINT", "10.10.4.21:9000").strip()
             access_key = os.getenv("MINIO_ACCESS_KEY", "").strip()
             secret_key = os.getenv("MINIO_SECRET_KEY", "").strip()
             bucket_default = os.getenv("MINIO_BUCKET", "hsdv-pdf-splitter").strip()

@@ -6,6 +6,7 @@ Luồng chuẩn: **upload MinIO → gọi worker → poll status → lấy outpu
 
 | Mục | Giá trị |
 |-----|---------|
+| Endpoint API | `10.10.4.21:9000` (UI console `:9001`) |
 | Bucket | `hsdv-pdf-splitter` |
 | Object key | `inbox/{job_id}.pdf` |
 | `job_id` | Chuỗi do backend chọn (UUID, mã hồ sơ, …) |

@@ -18,7 +18,7 @@ def main() -> int:
         return 1
 
     data = json.loads(SRC.read_text(encoding="utf-8"))
-    host = str(data.get("endPoint") or data.get("endpoint") or "10.10.6.134")
+    host = str(data.get("endPoint") or data.get("endpoint") or "10.10.4.21")
     port = int(data.get("port") or 9000)
     access = str(data.get("accessKey") or "")
     secret = str(data.get("secretKey") or "")
