@@ -171,7 +171,8 @@ python api.py
 # GET  http://<server>:8090/api/jobs/{job_id}
 ```
 
-Hợp đồng: [`docs/DEV_INTEGRATION.md`](docs/DEV_INTEGRATION.md)
+Hợp đồng đầy đủ: [`docs/DEV_INTEGRATION.md`](docs/DEV_INTEGRATION.md).  
+Gửi đội web: [`docs/DEV_CONNECT.md`](docs/DEV_CONNECT.md) (MinIO + cổng API).
 
 ## MinIO (worker)
 
