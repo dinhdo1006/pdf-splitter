@@ -6,7 +6,39 @@
   },
 
   "don_vi": [
-
+    {
+      "m1": "01",
+      "m2": "015",
+      "m3": "002",
+      "m4": "001",
+      "m5": "001",
+      "ten_chinh": "Đảng bộ Bưu điện Hà Nội",
+      "aliases": [
+        "Dang bo Buu dien Ha Noi",
+        "Buu dien thanh pho Ha Noi",
+        "Buu dien Ha Noi",
+        "BDHN",
+        "Đảng ủy Bưu điện Hà Nội",
+        "Dang uy Buu dien",
+        "Buu dien"
+      ],
+      "nguong_khop": 0.72
+    },
+    {
+      "m1": "01",
+      "m2": "015",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Đảng ủy Khối Doanh nghiệp Hà Nội",
+      "aliases": [
+        "Dang uy Khoi Doanh nghiep Ha Noi",
+        "Khoi Doanh nghiep Ha Noi",
+        "ĐU Khối Doanh nghiệp",
+        "Dang uy Khoi Doanh nghiep"
+      ],
+      "nguong_khop": 0.75
+    },
     {
       "m1": "01",
       "m2": "000",

@@ -147,7 +147,7 @@ def match_cap_uy_from_text(
         return None
 
     best_match: Optional[CapUyMatch] = None
-    best_score = 0.0
+    best_rank: tuple = (-1, -1.0, 0)  # (specificity_count, score, name_length)
 
     for entry in don_vi_list:
         # Bỏ qua mục ghi chú / mẫu chưa điền
@@ -155,6 +155,15 @@ def match_cap_uy_from_text(
             continue
 
         entry_thr = float(entry.get("nguong_khop", thr))
+        m_codes = (
+            str(entry.get("m1", "0")),
+            str(entry.get("m2", "0")),
+            str(entry.get("m3", "0")),
+            str(entry.get("m4", "0")),
+            str(entry.get("m5", "0")),
+        )
+        # Độ chi tiết: đếm số cấp M khác 0
+        specificity = sum(1 for m in m_codes if str(m).strip() not in ("0", "00", "000", ""))
 
         # Tập hợp tất cả tên cần thử (ten_chinh + aliases)
         candidates: list[tuple[str, str]] = []
@@ -169,23 +178,25 @@ def match_cap_uy_from_text(
             if len(cand_norm) < min_len:
                 continue
             sc = _score(query_norm, cand_norm)
-            if sc >= entry_thr and sc > best_score:
-                best_score = sc
-                best_match = CapUyMatch(
-                    m1=str(entry.get("m1", "0")),
-                    m2=str(entry.get("m2", "0")),
-                    m3=str(entry.get("m3", "0")),
-                    m4=str(entry.get("m4", "0")),
-                    m5=str(entry.get("m5", "0")),
-                    ten_khop=ten_label,
-                    ten_chinh=ten_chinh,
-                    score=sc,
-                )
+            if sc >= entry_thr:
+                current_rank = (specificity, round(sc, 2), len(cand_norm))
+                if current_rank > best_rank:
+                    best_rank = current_rank
+                    best_match = CapUyMatch(
+                        m1=m_codes[0],
+                        m2=m_codes[1],
+                        m3=m_codes[2],
+                        m4=m_codes[3],
+                        m5=m_codes[4],
+                        ten_khop=ten_label,
+                        ten_chinh=ten_chinh,
+                        score=sc,
+                    )
 
     if best_match:
         logger.info(
             f"[cap_uy] Khớp: '{best_match.ten_khop}' "
-            f"→ {best_match.cap_uy_segment} (score={best_match.score:.2f})"
+            f"→ {best_match.cap_uy_segment} (score={best_match.score:.2f}, level={best_rank[0]})"
         )
     else:
         logger.debug("[cap_uy] Không khớp được đơn vị nào từ OCR text.")
