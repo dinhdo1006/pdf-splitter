@@ -197,7 +197,7 @@ def match_cap_uy_from_signals(
     signals: dict,
     *,
     threshold: Optional[float] = None,
-    max_pages: int = 10,
+    max_pages: Optional[int] = 50,
 ) -> Optional[CapUyMatch]:
     """
     Quét PageSignal nhiều trang (ưu tiên trang đầu) để tìm mã cấp ủy.
@@ -205,21 +205,25 @@ def match_cap_uy_from_signals(
     Args:
         signals   : dict[page_num → PageSignal] từ pipeline chính.
         threshold : Ngưỡng tương đồng.
-        max_pages : Chỉ quét tối đa N trang đầu (header tài liệu).
+        max_pages : Giới hạn số trang quét (mặc định 50 trang đầu).
 
     Returns:
         CapUyMatch đầu tiên tìm được, hoặc None.
     """
-    for page_num in sorted(signals.keys())[:max_pages]:
+    keys = sorted(signals.keys())
+    if max_pages:
+        keys = keys[:max_pages]
+
+    for page_num in keys:
         sig = signals[page_num]
         header = getattr(sig, "header_text", "") or ""
         full = getattr(sig, "full_text", "") or ""
-        blob = header + "\n" + full[:800]
+        blob = header + "\n" + full[:3000]
         result = match_cap_uy_from_text(blob, threshold=threshold)
         if result:
             logger.info(
                 f"[cap_uy] Tìm thấy tại trang {page_num}: "
-                f"{result.cap_uy_segment} ('{result.ten_chinh}')"
+                f"{result.cap_uy_segment} ('{result.ten_chinh}', score={result.score:.2f})"
             )
             return result
     return None
