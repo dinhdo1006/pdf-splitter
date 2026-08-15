@@ -545,6 +545,27 @@ def extract_member_identity_from_signals(
         )
     else:
         logger.warning("[identity] không trích được họ tên/CCCD/TĐV từ OCR")
+
+    # ── Tra mã cấp ủy M1–M5 từ catalog nếu chưa có ──────────────────────────
+    if merged.m1 is None:
+        try:
+            from pipeline.cap_uy_matcher import match_cap_uy_from_signals
+            cu = match_cap_uy_from_signals(signals)
+            if cu:
+                merged.m1 = cu.m1
+                merged.m2 = cu.m2
+                merged.m3 = cu.m3
+                merged.m4 = cu.m4
+                merged.m5 = cu.m5
+                merged.sources.append(f"m_codes:cap_uy_catalog@{cu.ten_chinh}")
+                merged.confidence = min(1.0, merged.confidence + 0.10)
+                logger.info(
+                    f"[identity] mã cấp ủy từ catalog: {cu.cap_uy_segment} "
+                    f"('{cu.ten_chinh}', score={cu.score:.2f})"
+                )
+        except Exception as _cu_exc:
+            logger.debug(f"[identity] cap_uy_matcher skip: {_cu_exc}")
+
     return merged
 
 

@@ -1,0 +1,401 @@
+{
+  "cau_hinh": {
+    "nguong_khop_mac_dinh": 0.78,
+    "so_ky_tu_ocr_toi_thieu": 6,
+    "uu_tien_co_nhan": true
+  },
+
+  "don_vi": [
+
+    {
+      "m1": "01",
+      "m2": "000",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Thành ủy Hà Nội",
+      "aliases": [
+        "Thanh uy Ha Noi",
+        "TU Hà Nội"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "001",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Ba Đình",
+      "aliases": [
+        "Quan uy Ba Dinh",
+        "QU Ba Đình"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "002",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Hoàn Kiếm",
+      "aliases": [
+        "Quan uy Hoan Kiem",
+        "QU Hoàn Kiếm"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "003",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Đống Đa",
+      "aliases": [
+        "Quan uy Dong Da",
+        "QU Đống Đa"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "004",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Hai Bà Trưng",
+      "aliases": [
+        "Quan uy Hai Ba Trung",
+        "QU Hai Bà Trưng"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "005",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Cầu Giấy",
+      "aliases": [
+        "Quan uy Cau Giay",
+        "QU Cầu Giấy"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "006",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Tây Hồ",
+      "aliases": [
+        "Quan uy Tay Ho",
+        "QU Tây Hồ"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "007",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Thanh Xuân",
+      "aliases": [
+        "Quan uy Thanh Xuan",
+        "QU Thanh Xuân"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "008",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Hoàng Mai",
+      "aliases": [
+        "Quan uy Hoang Mai",
+        "QU Hoàng Mai"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "009",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Long Biên",
+      "aliases": [
+        "Quan uy Long Bien",
+        "QU Long Biên"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "010",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Nam Từ Liêm",
+      "aliases": [
+        "Quan uy Nam Tu Liem",
+        "QU Nam Từ Liêm"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "011",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Quận ủy Bắc Từ Liêm",
+      "aliases": [
+        "Quan uy Bac Tu Liem",
+        "QU Bắc Từ Liêm"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "012",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Huyện ủy Đông Anh",
+      "aliases": [
+        "Huyen uy Dong Anh",
+        "HU Đông Anh"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "013",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Huyện ủy Gia Lâm",
+      "aliases": [
+        "Huyen uy Gia Lam",
+        "HU Gia Lâm"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "014",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Huyện ủy Thanh Trì",
+      "aliases": [
+        "Huyen uy Thanh Tri",
+        "HU Thanh Trì"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "015",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Huyện ủy Sóc Sơn",
+      "aliases": [
+        "Huyen uy Soc Son",
+        "HU Sóc Sơn"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "016",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Huyện ủy Mê Linh",
+      "aliases": [
+        "Huyen uy Me Linh",
+        "HU Mê Linh"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "017",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Huyện ủy Chương Mỹ",
+      "aliases": [
+        "Huyen uy Chuong My",
+        "HU Chương Mỹ"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "018",
+      "m3": "000",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Huyện ủy Thường Tín",
+      "aliases": [
+        "Huyen uy Thuong Tin",
+        "HU Thường Tín"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "001",
+      "m3": "001",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Đảng ủy phường Phúc Xá",
+      "aliases": [
+        "DU phuong Phuc Xa",
+        "ĐU Phúc Xá"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "001",
+      "m3": "002",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Đảng ủy phường Trúc Bạch",
+      "aliases": [
+        "DU phuong Truc Bach",
+        "ĐU Trúc Bạch"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "001",
+      "m3": "003",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Đảng ủy phường Vĩnh Phúc",
+      "aliases": [
+        "DU phuong Vinh Phuc",
+        "ĐU Vĩnh Phúc"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "002",
+      "m3": "001",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Đảng ủy phường Hàng Bạc",
+      "aliases": [
+        "DU phuong Hang Bac",
+        "ĐU Hàng Bạc"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "002",
+      "m3": "002",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Đảng ủy phường Hàng Gai",
+      "aliases": [
+        "DU phuong Hang Gai",
+        "ĐU Hàng Gai"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "012",
+      "m3": "001",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Đảng ủy xã Đông Hội",
+      "aliases": [
+        "DU xa Dong Hoi",
+        "ĐU Đông Hội"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "012",
+      "m3": "002",
+      "m4": "000",
+      "m5": "000",
+      "ten_chinh": "Đảng ủy xã Nam Hồng",
+      "aliases": [
+        "DU xa Nam Hong",
+        "ĐU Nam Hồng"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "012",
+      "m3": "001",
+      "m4": "000",
+      "m5": "001",
+      "ten_chinh": "Chi bộ Thôn Lý Nhân",
+      "aliases": [
+        "Chi bo Thon Ly Nhan",
+        "CB Thôn Lý Nhân"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "012",
+      "m3": "001",
+      "m4": "000",
+      "m5": "002",
+      "ten_chinh": "Chi bộ Thôn Đoài",
+      "aliases": [
+        "Chi bo Thon Doai",
+        "CB Thôn Đoài"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "003",
+      "m3": "001",
+      "m4": "001",
+      "m5": "001",
+      "ten_chinh": "Chi bộ Phòng Nội vụ",
+      "aliases": [
+        "Chi bo Phong Noi vu",
+        "CB Phòng Nội vụ"
+      ],
+      "nguong_khop": 0.78
+    },
+    {
+      "m1": "01",
+      "m2": "003",
+      "m3": "001",
+      "m4": "001",
+      "m5": "002",
+      "ten_chinh": "Chi bộ Phòng Tài chính",
+      "aliases": [
+        "Chi bo Phong Tai chinh",
+        "CB Phòng Tài chính"
+      ],
+      "nguong_khop": 0.78
+    }
+  ]
+}
