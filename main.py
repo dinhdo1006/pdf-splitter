@@ -281,6 +281,8 @@ def main() -> int:
         logger.error(f"Failed to open PDF: {exc}")
         return 1
 
+    import time
+    start_time = time.time()
     total_pages = ingestor.total_pages
     process_pages = min(args.pages, total_pages) if args.pages else total_pages
 
@@ -885,6 +887,20 @@ def main() -> int:
     if page_audit_report:
         manifest_extra["page_audit"] = page_audit_report
 
+    elapsed_total = time.time() - start_time
+    sec_per_page = round(elapsed_total / max(process_pages, 1), 2)
+    pages_per_min = round((process_pages / max(elapsed_total, 0.001)) * 60, 2)
+    device_mode = "GPU" if getattr(args, "gpu", False) or (ocr and getattr(ocr, "use_gpu", False)) else "CPU"
+
+    manifest_extra["performance"] = {
+        "pages_processed": process_pages,
+        "elapsed_seconds": round(elapsed_total, 2),
+        "seconds_per_page": sec_per_page,
+        "pages_per_minute": pages_per_min,
+        "device": device_mode,
+        "dpi": args.dpi,
+    }
+
     manifest_path = output_dir / "manifest.json"
     try:
         exporter.write_manifest(
@@ -922,6 +938,20 @@ def main() -> int:
     n_ok = len(export_result.get("success", []))
     n_or = len(export_result.get("orphans", []))
     n_tent = len(export_result.get("tentative", []))
+
+    mins, secs = divmod(int(elapsed_total), 60)
+    logger.info("")
+    logger.info("=" * 66)
+    logger.info("  ⚡ BÁO CÁO HIỆU NĂNG BÓC TÁCH (BENCHMARK)")
+    logger.info("=" * 66)
+    logger.info(f"  • Tổng số trang xử lý      : {process_pages} trang")
+    logger.info(f"  • Tổng thời gian hoàn thành : {mins} phút {secs:02d} giây ({elapsed_total:.1f}s)")
+    logger.info(f"  • Tốc độ trung bình         : {sec_per_page} giây / trang")
+    logger.info(f"  • Tốc độ quy đổi            : {pages_per_min} trang / phút (~ {pages_per_min*60:.0f} trang / giờ)")
+    logger.info(f"  • Thiết bị xử lý           : {device_mode} (DPI={args.dpi})")
+    logger.info("=" * 66)
+    logger.info("")
+
     logger.info(
         f"Done. success={n_ok}, tentative={n_tent}, orphans={n_or}, "
         f"orphan_rate={orphan_rate}%, output={output_dir.resolve()}"
