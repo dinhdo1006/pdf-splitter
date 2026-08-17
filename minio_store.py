@@ -390,15 +390,31 @@ class MinioStore:
         finished_at: Optional[str] = None,
         archived_key: Optional[str] = None,
     ) -> dict[str, Any]:
+        p = progress or {}
+        pct = float(p.get("percent", 100.0 if status == "completed" else 0.0))
+        cur_p = int(p.get("current_page", 0))
+        tot_p = int(p.get("total_pages", 0))
+        stg = str(p.get("stage", "Hoàn thành" if status == "completed" else "Đang khởi tạo"))
+        eta = p.get("eta_seconds", 0.0)
+        elapsed = p.get("elapsed_seconds", 0.0)
+        docs = int(p.get("docs_found", 0))
+
         return {
             "job_id": job_id,
             "status": status,
+            "percent": pct,
+            "current_page": cur_p,
+            "total_pages": tot_p,
+            "stage": stg,
+            "eta_seconds": eta,
+            "elapsed_seconds": elapsed,
+            "docs_found": docs,
             "input_key": input_key,
             "output_prefix": output_prefix + "/",
             "manifest_key": manifest_key,
             "archived_input_key": archived_key,
             "bucket": self.settings.bucket,
-            "progress": progress or {},
+            "progress": p,
             "started_at": started_at,
             "finished_at": finished_at,
             "error": error,

@@ -226,14 +226,14 @@ def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job
 
         def _sync_progress():
             progress_path = local_output / "progress.json"
-            last_pct = -1.0
-            while not stop_sync.wait(2.0):
+            last_state = None
+            while not stop_sync.wait(0.5):
                 try:
                     if progress_path.is_file():
                         p_data = json.loads(progress_path.read_text(encoding="utf-8"))
-                        pct = p_data.get("percent", 0.0)
-                        if pct != last_pct:
-                            last_pct = pct
+                        curr_state = (p_data.get("current_page"), p_data.get("stage"), p_data.get("percent"))
+                        if curr_state != last_state:
+                            last_state = curr_state
                             store.write_status(
                                 job_id,
                                 store.build_status(

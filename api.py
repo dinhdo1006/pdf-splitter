@@ -237,6 +237,13 @@ async def stream_job_progress(job_id: str):
 
             if local_progress:
                 payload["progress"] = local_progress
+                payload["percent"] = local_progress.get("percent", 0.0)
+                payload["current_page"] = local_progress.get("current_page", 0)
+                payload["total_pages"] = local_progress.get("total_pages", 0)
+                payload["stage"] = local_progress.get("stage", "Đang xử lý")
+                payload["eta_seconds"] = local_progress.get("eta_seconds", 0.0)
+                payload["elapsed_seconds"] = local_progress.get("elapsed_seconds", 0.0)
+                payload["docs_found"] = local_progress.get("docs_found", 0)
             elif "progress" not in payload or not payload.get("progress"):
                 st = str(payload.get("status") or "")
                 if st == "completed":
@@ -245,18 +252,24 @@ async def stream_job_progress(job_id: str):
                         "percent": 100.0,
                         "stage": "Hoàn thành",
                     }
+                    payload["percent"] = 100.0
+                    payload["stage"] = "Hoàn thành"
                 elif st == "failed":
                     payload["progress"] = {
                         "status": "failed",
                         "percent": 0.0,
                         "stage": "Thất bại: " + str(payload.get("error") or ""),
                     }
+                    payload["percent"] = 0.0
+                    payload["stage"] = "Thất bại"
                 else:
                     payload["progress"] = {
                         "status": st or "running",
                         "percent": 0.0,
                         "stage": "Đang khởi tạo",
                     }
+                    payload["percent"] = 0.0
+                    payload["stage"] = "Đang khởi tạo"
 
             current_json = json.dumps(payload, ensure_ascii=False)
             if current_json != last_json:
@@ -267,7 +280,7 @@ async def stream_job_progress(job_id: str):
             if st in {"completed", "failed"}:
                 break
 
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
 
     return StreamingResponse(
         event_generator(),
@@ -278,6 +291,12 @@ async def stream_job_progress(job_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/api/jobs/{job_id}/progress")
+def get_job_progress(job_id: str) -> dict:
+    """Endpoint chuyên biệt lấy thông tin % tiến độ, số trang và thời gian còn lại."""
+    return get_job(job_id)
 
 
 @app.get("/api/jobs/{job_id:path}")
@@ -301,15 +320,24 @@ def get_job(job_id: str) -> dict:
     if payload is None:
         try:
             jid, inbox_key = store.resolve_inbox_pdf(job_id)
+            cur_prog = local_progress or {
+                "status": "queued_or_starting",
+                "percent": 0.0,
+                "stage": "Đang chờ worker tiếp nhận",
+                "current_page": 0,
+                "total_pages": 0,
+            }
             return {
                 "job_id": jid,
                 "status": "queued_or_starting",
+                "percent": cur_prog.get("percent", 0.0),
+                "current_page": cur_prog.get("current_page", 0),
+                "total_pages": cur_prog.get("total_pages", 0),
+                "stage": cur_prog.get("stage", "Đang chờ worker tiếp nhận"),
+                "eta_seconds": cur_prog.get("eta_seconds", 0.0),
+                "elapsed_seconds": cur_prog.get("elapsed_seconds", 0.0),
                 "input_key": inbox_key,
-                "progress": local_progress or {
-                    "status": "queued_or_starting",
-                    "percent": 0.0,
-                    "stage": "Đang chờ worker tiếp nhận",
-                },
+                "progress": cur_prog,
                 "message": "Đã có PDF inbox, đang chờ xử lý.",
             }
         except FileNotFoundError:
@@ -317,6 +345,13 @@ def get_job(job_id: str) -> dict:
 
     if local_progress:
         payload["progress"] = local_progress
+        payload["percent"] = local_progress.get("percent", 0.0)
+        payload["current_page"] = local_progress.get("current_page", 0)
+        payload["total_pages"] = local_progress.get("total_pages", 0)
+        payload["stage"] = local_progress.get("stage", "Đang xử lý")
+        payload["eta_seconds"] = local_progress.get("eta_seconds", 0.0)
+        payload["elapsed_seconds"] = local_progress.get("elapsed_seconds", 0.0)
+        payload["docs_found"] = local_progress.get("docs_found", 0)
     elif "progress" not in payload or not payload.get("progress"):
         st = str(payload.get("status") or "")
         if st == "completed":
@@ -325,18 +360,24 @@ def get_job(job_id: str) -> dict:
                 "percent": 100.0,
                 "stage": "Hoàn thành",
             }
+            payload["percent"] = 100.0
+            payload["stage"] = "Hoàn thành"
         elif st == "failed":
             payload["progress"] = {
                 "status": "failed",
                 "percent": 0.0,
                 "stage": "Thất bại: " + str(payload.get("error") or ""),
             }
+            payload["percent"] = 0.0
+            payload["stage"] = "Thất bại"
         else:
             payload["progress"] = {
                 "status": st or "running",
                 "percent": 0.0,
                 "stage": "Đang khởi tạo",
             }
+            payload["percent"] = 0.0
+            payload["stage"] = "Đang khởi tạo"
 
     st = str(payload.get("status") or "")
     if st in {"completed", "failed"}:
