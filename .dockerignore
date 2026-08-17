@@ -1,0 +1,40 @@
+# .dockerignore — Bỏ qua các file/thư mục không cần khi build Docker image
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# IDE / cursor
+.cursor/
+.idea/
+.vscode/
+
+# Thư mục runtime (tạo lại trong container)
+logs/
+output/
+work_minio/
+
+# File môi trường bí mật (truyền qua --env-file khi chạy)
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Temp / test
+*.tmp
+*.bak
+tmp/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/

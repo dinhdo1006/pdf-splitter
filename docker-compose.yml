@@ -1,0 +1,75 @@
+# docker-compose.yml — PDF Splitter: API + Worker (GPU RTX 5060 Ti / CUDA 12.9)
+#
+# Chạy:  docker compose up -d
+# Dừng:  docker compose down
+# Log:   docker compose logs -f
+
+name: pdf-splitter
+
+services:
+
+  # ── Service 1: HTTP API (FastAPI + uvicorn) ─────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pdf-splitter:latest
+    container_name: pdf_splitter_api
+    restart: always
+    command: python api.py
+    ports:
+      - "8090:8090"
+    env_file:
+      - .env
+    environment:
+      - SPLITTER_API_HOST=0.0.0.0
+      - SPLITTER_API_PORT=8090
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./logs:/app/logs
+      - ./work_minio:/app/work_minio
+      - ./output:/app/output
+      - ./models:/app/models        # cache model PaddleOCR / TrOCR
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Service 2: Worker (tự động quét MinIO inbox mỗi 30s) ───────────────────
+  worker:
+    image: pdf-splitter:latest    # dùng lại image đã build bởi service api
+    container_name: pdf_splitter_worker
+    restart: always
+    command: python worker_loop.py
+    depends_on:
+      api:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WORKER_POLL_INTERVAL=30   # quét inbox mỗi 30 giây
+      - WORKER_DPI=150
+      - WORKER_NO_PREPROCESS=1
+      - WORKER_GPU=1
+    volumes:
+      - ./logs:/app/logs
+      - ./work_minio:/app/work_minio
+      - ./output:/app/output
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
