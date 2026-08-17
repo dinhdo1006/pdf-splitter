@@ -119,6 +119,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Bật Rule 3 LLM trong ContinuationValidator (cần Ollama)",
     )
+    parser.add_argument(
+        "--progress-file",
+        default=None,
+        help="Đường dẫn ghi progress.json realtime cho API / UI",
+    )
     device = parser.add_mutually_exclusive_group()
     device.add_argument(
         "--gpu",
@@ -131,6 +136,57 @@ def parse_args() -> argparse.Namespace:
         help="Ép OCR dùng CPU",
     )
     return parser.parse_args()
+
+
+def write_progress(
+    progress_file: Path | None,
+    *,
+    stage: str,
+    current_page: int,
+    total_pages: int,
+    start_time: float,
+    percent: float | None = None,
+    current_doc_type: str | None = None,
+    docs_found: int = 0,
+    status: str = "running",
+) -> None:
+    """Ghi tiến trình bóc tách ra progress.json realtime cho API / Frontend."""
+    if progress_file is None:
+        return
+    import time
+    now = time.time()
+    elapsed = max(0.1, round(now - start_time, 1))
+    if percent is None:
+        percent = round((current_page / max(1, total_pages)) * 90.0, 1) if status == "running" else 100.0
+
+    if current_page > 0 and current_page < total_pages:
+        avg_sec = elapsed / current_page
+        remaining = total_pages - current_page
+        eta = round(avg_sec * remaining, 1)
+    elif status == "completed":
+        eta = 0.0
+    else:
+        eta = None
+
+    payload = {
+        "status": status,
+        "stage": stage,
+        "current_page": current_page,
+        "total_pages": total_pages,
+        "percent": min(100.0, max(0.0, float(percent))),
+        "elapsed_seconds": elapsed,
+        "eta_seconds": eta,
+        "current_doc_type": current_doc_type,
+        "docs_found": docs_found,
+        "updated_at": datetime.now().isoformat(),
+    }
+    try:
+        progress_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = progress_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(progress_file)
+    except Exception:
+        pass
 
 
 def resolve_docs_dir(
@@ -274,6 +330,7 @@ def main() -> int:
     # docs_dir quyết định sau OCR (identity từ scan + CLI override)
     docs_dir = output_dir
     preprocess_enabled = not args.no_preprocess
+    progress_file = Path(args.progress_file) if args.progress_file else (output_dir / "progress.json")
 
     try:
         ingestor = PDFIngestor(str(input_path), dpi=args.dpi)
@@ -285,6 +342,15 @@ def main() -> int:
     start_time = time.time()
     total_pages = ingestor.total_pages
     process_pages = min(args.pages, total_pages) if args.pages else total_pages
+
+    write_progress(
+        progress_file,
+        stage="Khởi tạo OCR & Nạp file PDF",
+        current_page=0,
+        total_pages=process_pages,
+        start_time=start_time,
+        percent=1.0,
+    )
 
     logger.info(
         f"Starting 3-state pipeline on {input_path} "
@@ -437,6 +503,17 @@ def main() -> int:
                 signal.boundary_score = decision.score
                 all_signals[page_num] = signal
 
+                write_progress(
+                    progress_file,
+                    stage="OCR & Phân tích ranh giới trang",
+                    current_page=page_num,
+                    total_pages=process_pages,
+                    start_time=start_time,
+                    percent=round((page_num / max(1, process_pages)) * 90.0, 1),
+                    current_doc_type=decision.page_class.value,
+                    docs_found=len(detector.get_documents()),
+                )
+
                 # Manifest từ trang Mục Lục (lấy bản đầu đủ tin)
                 if hoso_manifest is None and (
                     signal.is_toc or "muc luc" in (signal.header_text or "").lower()
@@ -489,6 +566,15 @@ def main() -> int:
 
     groups, orphan_pages = detector.finalize()
     blank_pages = list(getattr(detector, "blank_pages", []) or [])
+    write_progress(
+        progress_file,
+        stage="Pass-2: Rà soát & Ghép trang mồ côi",
+        current_page=process_pages,
+        total_pages=process_pages,
+        start_time=start_time,
+        percent=92.0,
+        docs_found=len(groups),
+    )
     logger.info(
         f"Detected {len(groups)} documents, {len(orphan_pages)} orphans, "
         f"{len(blank_pages)} blanks across {process_pages} pages (before Pass-2)"
@@ -667,6 +753,16 @@ def main() -> int:
 
     from pipeline.year_aware_sequencer import YearAwareSequencer, DocRecord
 
+    write_progress(
+        progress_file,
+        stage="Trích xuất thông tin Đảng viên & Đánh số",
+        current_page=process_pages,
+        total_pages=process_pages,
+        start_time=start_time,
+        percent=95.0,
+        docs_found=len(groups),
+    )
+
     def _group_ocr_blob(g) -> str:
         chunks: list[str] = []
         for pn in g.page_numbers[:4]:
@@ -784,6 +880,16 @@ def main() -> int:
         exporter.close()
         ingestor.close()
         return 0
+
+    write_progress(
+        progress_file,
+        stage="Xuất file PDF & Lập Manifest Phụ lục 2",
+        current_page=process_pages,
+        total_pages=process_pages,
+        start_time=start_time,
+        percent=98.0,
+        docs_found=len(groups),
+    )
 
     export_result = exporter.export_all(
         groups,
@@ -951,6 +1057,17 @@ def main() -> int:
     logger.info(f"  • Thiết bị xử lý           : {device_mode} (DPI={args.dpi})")
     logger.info("=" * 66)
     logger.info("")
+
+    write_progress(
+        progress_file,
+        stage="Hoàn thành",
+        current_page=process_pages,
+        total_pages=process_pages,
+        start_time=start_time,
+        percent=100.0,
+        docs_found=n_ok + n_tent,
+        status="completed",
+    )
 
     logger.info(
         f"Done. success={n_ok}, tentative={n_tent}, orphans={n_or}, "

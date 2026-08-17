@@ -193,6 +193,67 @@ def start_batch(body: BatchJobBody) -> dict:
     }
 
 
+@app.get("/api/jobs/{job_id:path}/stream")
+async def stream_job_progress(job_id: str):
+    """
+    Stream tiến trình realtime theo chuẩn Server-Sent Events (SSE).
+    Frontend kết nối:
+        const es = new EventSource('http://10.10.4.21:8090/api/jobs/hoso_001/stream');
+        es.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+            console.log(data.progress.percent + "%", data.progress.stage);
+        };
+    """
+    import asyncio
+    from fastapi.responses import StreamingResponse
+
+    clean_id = sanitize_job_id(unquote(job_id))
+    if not clean_id:
+        raise HTTPException(400, "job_id trống")
+
+    store = _store()
+
+    async def event_generator():
+        last_json = ""
+        while True:
+            payload = store.read_status(clean_id)
+            work_dir = store.job_work_dir(clean_id)
+            progress_file = work_dir / "output" / "progress.json"
+            if progress_file.is_file():
+                try:
+                    p_data = json.loads(progress_file.read_text(encoding="utf-8"))
+                    if payload is None:
+                        payload = {"job_id": clean_id, "status": "running"}
+                    if payload.get("status") == "running":
+                        payload["progress"] = p_data
+                except Exception:
+                    pass
+
+            if payload is None:
+                payload = {
+                    "job_id": clean_id,
+                    "status": "queued_or_starting",
+                    "progress": {
+                        "status": "queued_or_starting",
+                        "percent": 0.0,
+                        "stage": "Đang chờ worker tiếp nhận",
+                    },
+                }
+
+            current_json = json.dumps(payload, ensure_ascii=False)
+            if current_json != last_json:
+                last_json = current_json
+                yield f"data: {current_json}\n\n"
+
+            st = str(payload.get("status") or "")
+            if st in {"completed", "failed"}:
+                break
+
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @app.get("/api/jobs/{job_id:path}")
 def get_job(job_id: str) -> dict:
     job_id = sanitize_job_id(unquote(job_id))
@@ -200,6 +261,17 @@ def get_job(job_id: str) -> dict:
         raise HTTPException(400, "job_id trống")
     store = _store()
     payload = store.read_status(job_id)
+
+    # Đọc progress.json từ work_dir nếu đang chạy để có data realtime tức thì
+    work_dir = store.job_work_dir(job_id)
+    progress_file = work_dir / "output" / "progress.json"
+    local_progress = None
+    if progress_file.is_file():
+        try:
+            local_progress = json.loads(progress_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
     if payload is None:
         try:
             jid, inbox_key = store.resolve_inbox_pdf(job_id)
@@ -207,10 +279,19 @@ def get_job(job_id: str) -> dict:
                 "job_id": jid,
                 "status": "queued_or_starting",
                 "input_key": inbox_key,
-                "message": "Đã có PDF inbox, chưa có status.json.",
+                "progress": local_progress or {
+                    "status": "queued_or_starting",
+                    "percent": 0.0,
+                    "stage": "Đang chờ worker tiếp nhận",
+                },
+                "message": "Đã có PDF inbox, đang chờ xử lý.",
             }
         except FileNotFoundError:
             raise HTTPException(404, f"Không thấy job {job_id}") from None
+
+    if local_progress and payload.get("status") == "running":
+        payload["progress"] = local_progress
+
     st = str(payload.get("status") or "")
     if st in {"completed", "failed"}:
         _running.discard(job_id)

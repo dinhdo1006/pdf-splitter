@@ -217,9 +217,44 @@ def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job
 
     try:
         store.download_object(input_key, local_input)
-        run_argv = build_main_argv(args, local_input, local_output)
-        logger.info(f"[job {job_id}] pipeline: {' '.join(run_argv[2:])}")
-        proc = subprocess.run(run_argv, cwd=str(config.PROJECT_ROOT), check=False)
+        import threading
+
+        stop_sync = threading.Event()
+
+        def _sync_progress():
+            progress_path = local_output / "progress.json"
+            last_pct = -1.0
+            while not stop_sync.wait(2.0):
+                try:
+                    if progress_path.is_file():
+                        p_data = json.loads(progress_path.read_text(encoding="utf-8"))
+                        pct = p_data.get("percent", 0.0)
+                        if pct != last_pct:
+                            last_pct = pct
+                            store.write_status(
+                                job_id,
+                                store.build_status(
+                                    job_id,
+                                    status="running",
+                                    input_key=input_key,
+                                    output_prefix=output_prefix,
+                                    progress=p_data,
+                                    started_at=started_at,
+                                    pipeline_args=pipeline_flags,
+                                ),
+                            )
+                except Exception:
+                    pass
+
+        sync_thread = threading.Thread(target=_sync_progress, daemon=True)
+        sync_thread.start()
+
+        try:
+            proc = subprocess.run(run_argv, cwd=str(config.PROJECT_ROOT), check=False)
+        finally:
+            stop_sync.set()
+            sync_thread.join(timeout=1.0)
+
         if proc.returncode != 0:
             raise RuntimeError(f"main.py exit code {proc.returncode}")
 
@@ -230,6 +265,18 @@ def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job
         if getattr(args, "archive", False):
             archived_key = store.archive_inbox_object(input_key, job_id)
 
+        final_progress = {
+            "status": "completed",
+            "percent": 100.0,
+            "stage": "Hoàn thành",
+            "updated_at": _utc_now_iso(),
+        }
+        if (local_output / "progress.json").is_file():
+            try:
+                final_progress = json.loads((local_output / "progress.json").read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
         store.write_status(
             job_id,
             store.build_status(
@@ -239,6 +286,7 @@ def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job
                 output_prefix=output_prefix,
                 manifest_key=None,
                 stats=stats,
+                progress=final_progress,
                 pipeline_args=pipeline_flags,
                 started_at=started_at,
                 finished_at=_utc_now_iso(),
