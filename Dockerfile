@@ -6,6 +6,9 @@ FROM nvidia/cuda:12.9.0-cudnn-runtime-ubuntu24.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Ho_Chi_Minh
 
+# Ubuntu 24.04 dùng PEP 668 — cho phép pip cài system-wide trong container
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+
 # ── Cài Python 3.12 + các gói hệ thống cần thiết ──
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.12 \
