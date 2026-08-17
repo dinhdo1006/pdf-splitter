@@ -28,8 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Thư mục làm việc ──
 WORKDIR /app
 
-# ── Nâng cấp pip ──
-RUN pip install --no-cache-dir --upgrade pip
+# ── Cài pip mới qua get-pip.py (tránh xung đột pip Debian) ──
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3
 
 # ── Cài thư viện thường (không bao gồm paddle) ──
 COPY requirements.txt .
