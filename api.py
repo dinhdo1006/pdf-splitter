@@ -193,7 +193,7 @@ def start_batch(body: BatchJobBody) -> dict:
     }
 
 
-@app.get("/api/jobs/{job_id:path}/stream")
+@app.get("/api/jobs/{job_id}/stream")
 async def stream_job_progress(job_id: str):
     """
     Stream tiến trình realtime theo chuẩn Server-Sent Events (SSE).
