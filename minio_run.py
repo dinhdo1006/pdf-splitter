@@ -62,9 +62,16 @@ def parse_args() -> argparse.Namespace:
         help="Job ID — tìm inbox/{job_id}.pdf hoặc dùng làm output prefix",
     )
     parser.add_argument(
-        "--no-archive",
+        "--archive",
         action="store_true",
-        help="Không chuyển PDF inbox sang archive/ sau khi xử lý",
+        default=False,
+        help="Chuyển PDF inbox sang archive/ sau khi xử lý (mặc định: False - giữ nguyên file trong inbox/)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Ép bóc tách lại kể cả khi job đã có status completed",
     )
     parser.add_argument(
         "--keep-work",
@@ -220,7 +227,7 @@ def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job
         stats = load_manifest_stats(local_output)
 
         archived_key = None
-        if not args.no_archive:
+        if getattr(args, "archive", False):
             archived_key = store.archive_inbox_object(input_key, job_id)
 
         store.write_status(
@@ -296,6 +303,11 @@ def main() -> int:
         rc = 0
         for key in keys:
             job_id = store.derive_job_id(key)
+            if not getattr(args, "force", False):
+                st = store.read_status(job_id)
+                if st and st.get("status") == "completed":
+                    logger.debug(f"[job {job_id}] Đã hoàn thành (status=completed) -> Bỏ qua.")
+                    continue
             rc = process_job(store, args, key, job_id) or rc
         return rc
 
