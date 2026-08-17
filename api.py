@@ -251,7 +251,15 @@ async def stream_job_progress(job_id: str):
 
             await asyncio.sleep(1.0)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/jobs/{job_id:path}")
