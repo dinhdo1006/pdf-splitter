@@ -17,8 +17,7 @@ services:
     container_name: pdf_splitter_api
     restart: always
     command: python api.py
-    ports:
-      - "8090:8090"
+    network_mode: host            # dùng thẳng mạng server, không cần port forward
     env_file:
       - .env
     environment:
@@ -29,7 +28,7 @@ services:
       - ./logs:/app/logs
       - ./work_minio:/app/work_minio
       - ./output:/app/output
-      - ./models:/app/models        # cache model PaddleOCR / TrOCR
+      - ./models:/app/models
     deploy:
       resources:
         reservations:
@@ -46,10 +45,11 @@ services:
 
   # ── Service 2: Worker (tự động quét MinIO inbox mỗi 30s) ───────────────────
   worker:
-    image: pdf-splitter:latest    # dùng lại image đã build bởi service api
+    image: pdf-splitter:latest
     container_name: pdf_splitter_worker
     restart: always
     command: python worker_loop.py
+    network_mode: host            # dùng thẳng mạng server
     depends_on:
       api:
         condition: service_healthy
@@ -57,7 +57,7 @@ services:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
-      - WORKER_POLL_INTERVAL=30   # quét inbox mỗi 30 giây
+      - WORKER_POLL_INTERVAL=30
       - WORKER_DPI=150
       - WORKER_NO_PREPROCESS=1
       - WORKER_GPU=1
