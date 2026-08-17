@@ -13,7 +13,6 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.12 \
     python3.12-dev \
-    python3-pip \
     python3.12-venv \
     libgl1 \
     libglib2.0-0 \
@@ -28,8 +27,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Thư mục làm việc ──
 WORKDIR /app
 
-# ── Cài pip mới qua get-pip.py (tránh xung đột pip Debian) ──
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3
+# ── Cài pip sạch qua get-pip.py (không có pip Debian → không xung đột) ──
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+    && python3 /tmp/get-pip.py \
+    && rm /tmp/get-pip.py
 
 # ── Cài thư viện thường (không bao gồm paddle) ──
 COPY requirements.txt .
