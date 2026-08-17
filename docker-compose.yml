@@ -25,6 +25,7 @@ services:
       - SPLITTER_API_PORT=8090
       - PYTHONUNBUFFERED=1
     volumes:
+      - .:/app
       - ./logs:/app/logs
       - ./work_minio:/app/work_minio
       - ./output:/app/output
@@ -62,6 +63,7 @@ services:
       - WORKER_NO_PREPROCESS=1
       - WORKER_GPU=1
     volumes:
+      - .:/app
       - ./logs:/app/logs
       - ./work_minio:/app/work_minio
       - ./output:/app/output
