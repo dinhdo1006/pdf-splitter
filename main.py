@@ -182,11 +182,11 @@ def write_progress(
     }
     try:
         progress_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = progress_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(progress_file)
-    except Exception:
-        pass
+        progress_file.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        logger.debug(f"write_progress err: {e}")
 
 
 def resolve_docs_dir(
