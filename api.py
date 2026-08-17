@@ -10,6 +10,7 @@ HTTP API cho đội web/backend gọi worker (không gọi CLI Python trực ti�
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys

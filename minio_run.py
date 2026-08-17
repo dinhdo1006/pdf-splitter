@@ -217,6 +217,9 @@ def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job
 
     try:
         store.download_object(input_key, local_input)
+        run_argv = build_main_argv(args, local_input, local_output)
+        logger.info(f"[job {job_id}] pipeline: {' '.join(run_argv[2:])}")
+
         import threading
 
         stop_sync = threading.Event()
