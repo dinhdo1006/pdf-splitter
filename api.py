@@ -71,6 +71,10 @@ app.add_middleware(
 
 
 def _spawn_trigger(job_hint: str, body: StartJobBody) -> None:
+    log_file = config.PROJECT_ROOT / "logs" / "trigger.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    f_log = open(log_file, "a", encoding="utf-8")
+
     argv = [
         sys.executable,
         str(config.PROJECT_ROOT / "minio_trigger.py"),
@@ -80,17 +84,18 @@ def _spawn_trigger(job_hint: str, body: StartJobBody) -> None:
     ]
     if body.pages is not None:
         argv.extend(["--pages", str(body.pages)])
-    if body.gpu:
+    if body.gpu or (not body.cpu and os.getenv("WORKER_GPU", "1") == "1"):
         argv.append("--gpu")
     if body.cpu:
         argv.append("--cpu")
     if body.debug:
         argv.append("--debug")
+
     subprocess.Popen(
         argv,
         cwd=str(config.PROJECT_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=f_log,
+        stderr=f_log,
         start_new_session=True,
     )
 
@@ -217,29 +222,41 @@ async def stream_job_progress(job_id: str):
     async def event_generator():
         last_json = ""
         while True:
-            payload = store.read_status(clean_id)
+            payload = store.read_status(clean_id) or {
+                "job_id": clean_id,
+                "status": "queued_or_starting",
+            }
             work_dir = store.job_work_dir(clean_id)
             progress_file = work_dir / "output" / "progress.json"
+            local_progress = None
             if progress_file.is_file():
                 try:
-                    p_data = json.loads(progress_file.read_text(encoding="utf-8"))
-                    if payload is None:
-                        payload = {"job_id": clean_id, "status": "running"}
-                    if payload.get("status") == "running":
-                        payload["progress"] = p_data
+                    local_progress = json.loads(progress_file.read_text(encoding="utf-8"))
                 except Exception:
                     pass
 
-            if payload is None:
-                payload = {
-                    "job_id": clean_id,
-                    "status": "queued_or_starting",
-                    "progress": {
-                        "status": "queued_or_starting",
+            if local_progress:
+                payload["progress"] = local_progress
+            elif "progress" not in payload or not payload.get("progress"):
+                st = str(payload.get("status") or "")
+                if st == "completed":
+                    payload["progress"] = {
+                        "status": "completed",
+                        "percent": 100.0,
+                        "stage": "Hoàn thành",
+                    }
+                elif st == "failed":
+                    payload["progress"] = {
+                        "status": "failed",
                         "percent": 0.0,
-                        "stage": "Đang chờ worker tiếp nhận",
-                    },
-                }
+                        "stage": "Thất bại: " + str(payload.get("error") or ""),
+                    }
+                else:
+                    payload["progress"] = {
+                        "status": st or "running",
+                        "percent": 0.0,
+                        "stage": "Đang khởi tạo",
+                    }
 
             current_json = json.dumps(payload, ensure_ascii=False)
             if current_json != last_json:
@@ -298,8 +315,28 @@ def get_job(job_id: str) -> dict:
         except FileNotFoundError:
             raise HTTPException(404, f"Không thấy job {job_id}") from None
 
-    if local_progress and payload.get("status") == "running":
+    if local_progress:
         payload["progress"] = local_progress
+    elif "progress" not in payload or not payload.get("progress"):
+        st = str(payload.get("status") or "")
+        if st == "completed":
+            payload["progress"] = {
+                "status": "completed",
+                "percent": 100.0,
+                "stage": "Hoàn thành",
+            }
+        elif st == "failed":
+            payload["progress"] = {
+                "status": "failed",
+                "percent": 0.0,
+                "stage": "Thất bại: " + str(payload.get("error") or ""),
+            }
+        else:
+            payload["progress"] = {
+                "status": st or "running",
+                "percent": 0.0,
+                "stage": "Đang khởi tạo",
+            }
 
     st = str(payload.get("status") or "")
     if st in {"completed", "failed"}:
