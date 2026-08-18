@@ -221,17 +221,41 @@ def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job
         logger.info(f"[job {job_id}] pipeline: {' '.join(run_argv[2:])}")
 
         import threading
+        import time
 
         stop_sync = threading.Event()
+        proc_holder: list[Optional[subprocess.Popen]] = [None]
 
         def _sync_progress():
             progress_path = local_output / "progress.json"
+            cancel_marker = work_dir / ".cancel"
+            cancel_marker_out = local_output / ".cancel"
             last_state = None
-            while not stop_sync.wait(0.5):
+            while not stop_sync.wait(0.3):
+                # 1. Kiểm tra nếu có tín hiệu hủy
+                if cancel_marker.is_file() or cancel_marker_out.is_file():
+                    logger.warning(
+                        f"[job {job_id}] Nhận tín hiệu HỦY hồ sơ. Dừng ngay tiến trình bóc tách..."
+                    )
+                    p = proc_holder[0]
+                    if p is not None and p.poll() is None:
+                        try:
+                            p.terminate()
+                            time.sleep(0.2)
+                            p.kill()
+                        except Exception:
+                            pass
+                    break
+
+                # 2. Đồng bộ tiến độ lên MinIO
                 try:
                     if progress_path.is_file():
                         p_data = json.loads(progress_path.read_text(encoding="utf-8"))
-                        curr_state = (p_data.get("current_page"), p_data.get("stage"), p_data.get("percent"))
+                        curr_state = (
+                            p_data.get("current_page"),
+                            p_data.get("stage"),
+                            p_data.get("percent"),
+                        )
                         if curr_state != last_state:
                             last_state = curr_state
                             store.write_status(
@@ -253,10 +277,18 @@ def process_job(store: MinioStore, args: argparse.Namespace, input_key: str, job
         sync_thread.start()
 
         try:
-            proc = subprocess.run(run_argv, cwd=str(config.PROJECT_ROOT), check=False)
+            proc = subprocess.Popen(run_argv, cwd=str(config.PROJECT_ROOT))
+            proc_holder[0] = proc
+            proc.wait()
         finally:
             stop_sync.set()
             sync_thread.join(timeout=1.0)
+
+        # Nếu bị hủy: dọn dẹp và kết thúc ngay
+        if (work_dir / ".cancel").is_file() or (local_output / ".cancel").is_file() or proc.returncode in (130, -15, -9):
+            logger.info(f"[job {job_id}] Hồ sơ đã bị hủy/xóa thành công. Dọn dẹp work_dir.")
+            shutil.rmtree(work_dir, ignore_errors=True)
+            return 0
 
         if proc.returncode != 0:
             raise RuntimeError(f"main.py exit code {proc.returncode}")

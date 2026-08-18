@@ -469,6 +469,16 @@ def main() -> int:
             desc="Processing pages",
             unit="page",
         ):
+            # Kiểm tra tín hiệu HỦY / DỪNG từ API (Xóa hồ sơ)
+            cancel_marker = output_dir.parent / ".cancel" if output_dir else None
+            if (cancel_marker and cancel_marker.is_file()) or (
+                output_dir and (output_dir / ".cancel").is_file()
+            ):
+                logger.warning(
+                    f"⚠️ Nhận tín hiệu HỦY / XÓA hồ sơ tại trang {page_num}! Dừng tiến trình ngay lập tức."
+                )
+                return 130
+
             try:
                 signal = None
                 if use_cache:

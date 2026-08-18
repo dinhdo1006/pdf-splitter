@@ -438,8 +438,18 @@ def delete_or_cancel_job(
         raise HTTPException(400, "job_id trống")
 
     store = _store()
+    work_dir = store.job_work_dir(clean_id)
 
-    # 1. Hủy tiến trình con đang chạy
+    # 1. Ghi marker .cancel để tiến trình bóc tách ở bất kỳ container nào lập tức dừng ngay
+    try:
+        work_dir.mkdir(parents=True, exist_ok=True)
+        (work_dir / ".cancel").touch(exist_ok=True)
+        (work_dir / "output").mkdir(parents=True, exist_ok=True)
+        (work_dir / "output" / ".cancel").touch(exist_ok=True)
+    except Exception as me:
+        logger.debug(f"Tạo cancel marker warning: {me}")
+
+    # 2. Hủy tiến trình con đang chạy (nếu có)
     killed = False
     proc = _job_processes.pop(clean_id, None)
     if proc is not None:
@@ -451,12 +461,14 @@ def delete_or_cancel_job(
         except Exception as e:
             logger.warning(f"Kill process {clean_id} failed: {e}")
 
-    _running.discard(clean_id)
+    try:
+        # pkill trên Linux để ngắt dứt điểm tiến trình
+        if sys.platform != "win32":
+            os.system(f"pkill -9 -f '{clean_id}' 2>/dev/null")
+    except Exception:
+        pass
 
-    # 2. Xóa thư mục tạm work_minio local
-    work_dir = store.job_work_dir(clean_id)
-    if work_dir.exists():
-        shutil.rmtree(work_dir, ignore_errors=True)
+    _running.discard(clean_id)
 
     details: dict[str, Any] = {"killed_process": killed}
 
