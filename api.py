@@ -41,9 +41,17 @@ class StartJobBody(BaseModel):
         None,
         description="Tên file không đuôi .pdf — cho phép khoảng trắng",
     )
+    jobId: Optional[str] = Field(
+        None,
+        description="Alias camelCase từ Node/TypeScript",
+    )
     object_key: Optional[str] = Field(
         None,
         description="Key MinIO đầy đủ, vd. inbox/Ho so Nguyen Van A.pdf",
+    )
+    objectKey: Optional[str] = Field(
+        None,
+        description="Alias camelCase từ Node/TypeScript",
     )
     pages: Optional[int] = Field(None, ge=1)
     dpi: int = Field(150, ge=72, le=400)
@@ -115,7 +123,13 @@ def start_job(body: StartJobBody) -> dict:
     """1 PDF = 1 hồ sơ. Tên file có khoảng trắng vẫn chạy."""
     if body.gpu and body.cpu:
         raise HTTPException(400, "Không dùng gpu và cpu cùng lúc")
-    hint = (body.object_key or body.job_id or "").strip()
+    hint = (
+        body.object_key
+        or body.objectKey
+        or body.job_id
+        or body.jobId
+        or ""
+    ).strip()
     if not hint:
         raise HTTPException(400, "Cần job_id hoặc object_key")
 
