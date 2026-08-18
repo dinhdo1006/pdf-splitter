@@ -503,16 +503,24 @@ def main() -> int:
                 signal.boundary_score = decision.score
                 all_signals[page_num] = signal
 
-                write_progress(
-                    progress_file,
-                    stage="OCR & Phân tích ranh giới trang",
-                    current_page=page_num,
-                    total_pages=process_pages,
-                    start_time=start_time,
-                    percent=round((page_num / max(1, process_pages)) * 90.0, 1),
-                    current_doc_type=decision.page_class.value,
-                    docs_found=len(detector.get_documents()),
-                )
+                try:
+                    docs_cnt = (
+                        len(detector.get_documents())
+                        if hasattr(detector, "get_documents")
+                        else len(getattr(detector, "_groups", []))
+                    )
+                    write_progress(
+                        progress_file,
+                        stage="OCR & Phân tích ranh giới trang",
+                        current_page=page_num,
+                        total_pages=process_pages,
+                        start_time=start_time,
+                        percent=round((page_num / max(1, process_pages)) * 90.0, 1),
+                        current_doc_type=decision.page_class.value,
+                        docs_found=docs_cnt,
+                    )
+                except Exception as p_err:
+                    logger.debug(f"write_progress warning page {page_num}: {p_err}")
 
                 # Manifest từ trang Mục Lục (lấy bản đầu đủ tin)
                 if hoso_manifest is None and (

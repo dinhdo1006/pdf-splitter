@@ -905,6 +905,13 @@ class BoundaryDetector:
         )
         return list(self._groups), list(self._orphan_pages)
 
+    def get_documents(self) -> list[DocumentGroup]:
+        """Trả về danh sách các document group đã và đang tạo."""
+        res = list(self._groups)
+        if self._current_group is not None:
+            res.append(self._current_group)
+        return res
+
     @property
     def current_group(self) -> DocumentGroup | None:
         return self._current_group
