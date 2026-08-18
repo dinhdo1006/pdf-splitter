@@ -356,6 +356,38 @@ class MinioStore:
                 continue
         return None
 
+    def delete_object(self, object_key: str) -> bool:
+        """Xóa 1 object trong bucket MinIO."""
+        try:
+            self.client.remove_object(self.settings.bucket, object_key)
+            logger.info(f"[minio] deleted s3://{self.settings.bucket}/{object_key}")
+            return True
+        except Exception as e:
+            logger.warning(f"[minio] delete {object_key} failed: {e}")
+            return False
+
+    def delete_prefix(self, prefix: str) -> int:
+        """Xóa toàn bộ objects có prefix chỉ định trong bucket MinIO."""
+        norm_p = _norm_prefix(prefix)
+        if not norm_p:
+            return 0
+        try:
+            objects = self.client.list_objects(
+                self.settings.bucket, prefix=norm_p + "/", recursive=True
+            )
+            cnt = 0
+            for obj in objects:
+                self.client.remove_object(self.settings.bucket, obj.object_name)
+                cnt += 1
+            if cnt > 0:
+                logger.info(
+                    f"[minio] deleted {cnt} objects under s3://{self.settings.bucket}/{norm_p}/"
+                )
+            return cnt
+        except Exception as e:
+            logger.warning(f"[minio] delete_prefix {norm_p} failed: {e}")
+            return 0
+
     def archive_inbox_object(self, source_key: str, job_id: str) -> Optional[str]:
         dest_key = self.archive_key_for_job(sanitize_job_id(job_id) or job_id)
         try:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from typing import Optional
@@ -19,12 +20,14 @@ from urllib.parse import unquote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 from pydantic import BaseModel, Field
 
 import config
 from minio_store import MinioSettings, MinioStore, sanitize_job_id
 
 _running: set[str] = set()
+_job_processes: dict[str, subprocess.Popen] = {}
 
 
 def _store() -> MinioStore:
@@ -70,7 +73,7 @@ app.add_middleware(
 )
 
 
-def _spawn_trigger(job_hint: str, body: StartJobBody) -> None:
+def _spawn_trigger(job_hint: str, body: StartJobBody, job_id: str = "") -> None:
     log_file = config.PROJECT_ROOT / "logs" / "trigger.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
     f_log = open(log_file, "a", encoding="utf-8")
@@ -91,13 +94,15 @@ def _spawn_trigger(job_hint: str, body: StartJobBody) -> None:
     if body.debug:
         argv.append("--debug")
 
-    subprocess.Popen(
+    proc = subprocess.Popen(
         argv,
         cwd=str(config.PROJECT_ROOT),
         stdout=f_log,
         stderr=f_log,
         start_new_session=True,
     )
+    if job_id:
+        _job_processes[job_id] = proc
 
 
 @app.get("/health")
@@ -125,7 +130,7 @@ def start_job(body: StartJobBody) -> dict:
 
     _running.add(job_id)
     try:
-        _spawn_trigger(inbox_key, body)
+        _spawn_trigger(inbox_key, body, job_id=job_id)
     except Exception:
         _running.discard(job_id)
         raise
@@ -411,7 +416,80 @@ def get_job(job_id: str) -> dict:
     st = str(payload.get("status") or "")
     if st in {"completed", "failed"}:
         _running.discard(job_id)
+        _job_processes.pop(job_id, None)
     return payload
+
+
+@app.delete("/api/jobs/{job_id:path}")
+def delete_or_cancel_job(
+    job_id: str,
+    delete_inbox: bool = True,
+    delete_output: bool = True,
+) -> dict:
+    """
+    Hủy tiến trình bóc tách đang chạy và xóa sạch dữ liệu hồ sơ trong MinIO.
+    - Dừng ngay tiến trình GPU/CPU nếu đang chạy.
+    - Xóa file gốc trong inbox/ (để Worker không bao giờ quét lại).
+    - Xóa toàn bộ kết quả trong output/ và file status.
+    - Dọn dẹp thư mục tạm work_minio/.
+    """
+    clean_id = sanitize_job_id(unquote(job_id))
+    if not clean_id:
+        raise HTTPException(400, "job_id trống")
+
+    store = _store()
+
+    # 1. Hủy tiến trình con đang chạy
+    killed = False
+    proc = _job_processes.pop(clean_id, None)
+    if proc is not None:
+        try:
+            proc.terminate()
+            proc.kill()
+            killed = True
+            logger.info(f"Đã dừng tiến trình bóc tách của job {clean_id}")
+        except Exception as e:
+            logger.warning(f"Kill process {clean_id} failed: {e}")
+
+    _running.discard(clean_id)
+
+    # 2. Xóa thư mục tạm work_minio local
+    work_dir = store.job_work_dir(clean_id)
+    if work_dir.exists():
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    details: dict[str, Any] = {"killed_process": killed}
+
+    # 3. Xóa file trong inbox (để Worker không quét lại)
+    if delete_inbox:
+        inbox_deleted = False
+        try:
+            _, inbox_key = store.resolve_inbox_pdf(clean_id)
+            inbox_deleted = store.delete_object(inbox_key)
+        except FileNotFoundError:
+            for cand in [
+                f"inbox/{clean_id}.pdf",
+                f"inbox/{unquote(job_id)}.pdf",
+                f"inbox/{unquote(job_id).strip()}",
+            ]:
+                if store.object_exists(cand):
+                    inbox_deleted = store.delete_object(cand) or inbox_deleted
+        details["inbox_deleted"] = inbox_deleted
+
+    # 4. Xóa kết quả output và status trong MinIO
+    if delete_output:
+        out_prefix = store.output_prefix_for_job(clean_id)
+        details["output_files_deleted"] = store.delete_prefix(out_prefix)
+
+    status_key = store.status_key_for_job(clean_id)
+    details["status_deleted"] = store.delete_object(status_key)
+
+    return {
+        "ok": True,
+        "job_id": clean_id,
+        "message": f"Đã hủy và xóa hoàn toàn hồ sơ {clean_id}",
+        "details": details,
+    }
 
 
 if __name__ == "__main__":
