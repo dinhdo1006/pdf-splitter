@@ -399,10 +399,19 @@ class MinioStore:
         elapsed = p.get("elapsed_seconds", 0.0)
         docs = int(p.get("docs_found", 0))
 
+        st_dict = dict(stats or {})
+        if "completeness_pct" not in st_dict:
+            st_dict["completeness_pct"] = pct
+        if "current_page" not in st_dict:
+            st_dict["current_page"] = cur_p
+        if "total_pages" not in st_dict:
+            st_dict["total_pages"] = tot_p
+
         return {
             "job_id": job_id,
             "status": status,
             "percent": pct,
+            "progress_percent": pct,
             "current_page": cur_p,
             "total_pages": tot_p,
             "stage": stg,
@@ -418,7 +427,7 @@ class MinioStore:
             "started_at": started_at,
             "finished_at": finished_at,
             "error": error,
-            "stats": stats or {},
+            "stats": st_dict,
             "pipeline_args": pipeline_args or [],
             "updated_at": _utc_now_iso(),
         }

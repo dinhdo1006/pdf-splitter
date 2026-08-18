@@ -271,6 +271,16 @@ async def stream_job_progress(job_id: str):
                     payload["percent"] = 0.0
                     payload["stage"] = "Đang khởi tạo"
 
+            pct_val = float(payload.get("percent", 0.0))
+            cur_p = int(payload.get("current_page", 0))
+            tot_p = int(payload.get("total_pages", 0))
+            payload["progress_percent"] = pct_val
+            if "stats" not in payload or not isinstance(payload["stats"], dict):
+                payload["stats"] = {}
+            payload["stats"]["completeness_pct"] = pct_val
+            payload["stats"]["current_page"] = cur_p
+            payload["stats"]["total_pages"] = tot_p
+
             current_json = json.dumps(payload, ensure_ascii=False)
             if current_json != last_json:
                 last_json = current_json
@@ -327,17 +337,26 @@ def get_job(job_id: str) -> dict:
                 "current_page": 0,
                 "total_pages": 0,
             }
+            pct = float(cur_prog.get("percent", 0.0))
+            cp = int(cur_prog.get("current_page", 0))
+            tp = int(cur_prog.get("total_pages", 0))
             return {
                 "job_id": jid,
                 "status": "queued_or_starting",
-                "percent": cur_prog.get("percent", 0.0),
-                "current_page": cur_prog.get("current_page", 0),
-                "total_pages": cur_prog.get("total_pages", 0),
+                "percent": pct,
+                "progress_percent": pct,
+                "current_page": cp,
+                "total_pages": tp,
                 "stage": cur_prog.get("stage", "Đang chờ worker tiếp nhận"),
                 "eta_seconds": cur_prog.get("eta_seconds", 0.0),
                 "elapsed_seconds": cur_prog.get("elapsed_seconds", 0.0),
                 "input_key": inbox_key,
                 "progress": cur_prog,
+                "stats": {
+                    "completeness_pct": pct,
+                    "current_page": cp,
+                    "total_pages": tp,
+                },
                 "message": "Đã có PDF inbox, đang chờ xử lý.",
             }
         except FileNotFoundError:
@@ -378,6 +397,16 @@ def get_job(job_id: str) -> dict:
             }
             payload["percent"] = 0.0
             payload["stage"] = "Đang khởi tạo"
+
+    pct_res = float(payload.get("percent", 0.0))
+    c_p = int(payload.get("current_page", 0))
+    t_p = int(payload.get("total_pages", 0))
+    payload["progress_percent"] = pct_res
+    if "stats" not in payload or not isinstance(payload["stats"], dict):
+        payload["stats"] = {}
+    payload["stats"]["completeness_pct"] = pct_res
+    payload["stats"]["current_page"] = c_p
+    payload["stats"]["total_pages"] = t_p
 
     st = str(payload.get("status") or "")
     if st in {"completed", "failed"}:
