@@ -11,10 +11,14 @@ rm -rf release_build
 mkdir -p release_build/phan_cua_ban_ai
 
 # b. Lưu Docker Image
-echo "[2/6] Đang nén Docker image pdf-splitter:latest..."
+echo "[2/6] Đang nén Docker image (pdf-splitter và minio)..."
 echo "      (Việc này sẽ mất vài phút tùy tốc độ ổ cứng)"
 mkdir -p release_build/phan_cua_ban_ai/images
 docker save -o release_build/phan_cua_ban_ai/images/pdf-splitter-latest.tar pdf-splitter:latest
+
+echo "      Đang kéo và nén Docker image minio/minio..."
+docker pull minio/minio:latest
+docker save -o release_build/phan_cua_ban_ai/images/minio-latest.tar minio/minio:latest
 
 # c. Copy file cấu hình, cài đặt và MÃ NGUỒN (CODE)
 echo "[3/6] Đang copy mã nguồn và các file cấu hình..."

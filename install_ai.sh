@@ -32,12 +32,19 @@ else
 fi
 
 # 3. NẠP DOCKER IMAGE OFFLINE
-echo "--> [3/5] Đang nạp Docker image cho hệ thống AI..."
+echo "--> [3/5] Đang nạp Docker image cho hệ thống AI và MinIO..."
 if [ -f "images/pdf-splitter-latest.tar" ]; then
     docker load -i images/pdf-splitter-latest.tar
 else
     echo "[LỖI] Không tìm thấy file images/pdf-splitter-latest.tar! Vui lòng kiểm tra lại."
     exit 1
+fi
+
+if [ -f "images/minio-latest.tar" ]; then
+    echo "    Đang nạp Docker image cho MinIO..."
+    docker load -i images/minio-latest.tar
+else
+    echo "⚠️  [CẢNH BÁO] Không tìm thấy file images/minio-latest.tar. MinIO có thể không khởi động được!"
 fi
 
 # 4. CẤU HÌNH OLLAMA MODEL OFFLINE (Bằng định dạng GGUF)
