@@ -1,5 +1,6 @@
 # config.py — All tunable constants. Edit here, not in individual modules.
 
+import os
 from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────
@@ -156,8 +157,14 @@ def page_size_ocr_dpi(width_pt: float, height_pt: float, default_dpi: int | None
     return int(dpi)
 
 # ── Continuation validator ─────────────────────────────────────────
-ENABLE_CONTINUATION_LLM = False  # Bật bằng --enable-continuation-llm (cần Ollama)
-CONTINUATION_LLM_MIN_CONFIDENCE = 0.75
+ENABLE_CONTINUATION_LLM = os.getenv("ENABLE_CONTINUATION_LLM", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+CONTINUATION_LLM_MIN_CONFIDENCE = float(
+    os.getenv("CONTINUATION_LLM_MIN_CONFIDENCE", "0.75")
+)
 
 # ── Output ─────────────────────────────────────────────────────────
 MAX_SLUG_LENGTH = 60
@@ -177,10 +184,16 @@ HW_STROKE_THRESHOLD = 0.35  # Irregularity score để phân biệt viết tay
 HW_MIN_REGION_AREA = 500  # px² — bỏ qua vùng nhỏ hơn
 
 # ── Local LLM Referee (Ollama Hybrid) ──────────────────────────────
-ENABLE_LLM_REFEREE = False       # Không override boundary kiểu cũ; LLM chỉ qua ContinuationValidator
-OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"  # /api/chat (không phải /api/generate)
-OLLAMA_MODEL = "qwen2.5:3b"      # Model nhẹ, chạy mượt trên CPU/GPU
-OLLAMA_TIMEOUT = 10.0            # Giới hạn thời gian chờ (giây)
+ENABLE_LLM_REFEREE = os.getenv("ENABLE_LLM_REFEREE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+OLLAMA_ENDPOINT = os.getenv(
+    "OLLAMA_ENDPOINT", "http://localhost:11434/api/chat"
+)  # /api/chat (không phải /api/generate)
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")  # Mặc định qwen2.5:7b
+OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "15.0"))  # Timeout (giây)
 LLM_REVIEW_RANGE = (0.28, 0.62)  # Những trang có điểm trong khoảng này sẽ chuyển cho LLM phán quyết
 
 # ── Year-Aware Sequencing ───────────────────────────────────────────
